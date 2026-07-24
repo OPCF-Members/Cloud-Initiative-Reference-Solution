@@ -2,6 +2,25 @@
 
 OPC Foundation Cloud Initiative Open-Source Reference Solution
 
+## Table of Contents
+
+- [Reference Edge Hardware](#reference-edge-hardware)
+  - [Bill of Materials (Purchasing)](#bill-of-materials-purchasing)
+  - [Software Installation (Imaging the SSD)](#software-installation-imaging-the-ssd)
+  - [Hardware Installation](#hardware-installation)
+    - [First-Boot Configuration](#first-boot-configuration)
+- [Deploying the IoT Stack](#deploying-the-iot-stack)
+  - [What the Stack Contains](#what-the-stack-contains)
+  - [Install K3s on the Pi](#install-k3s-on-the-pi)
+  - [Apply the Stack Manifest](#apply-the-stack-manifest)
+  - [Where Telemetry Data Is Persisted](#where-telemetry-data-is-persisted)
+- [Accessing the Web UIs](#accessing-the-web-uis)
+- [Onboarding Devices](#onboarding-devices)
+  - [Configuring the Broker Connection and Metadata (UA Cloud Publisher)](#configuring-the-broker-connection-and-metadata-ua-cloud-publisher)
+  - [Onboarding an OPC UA Device (via UA Cloud Publisher)](#onboarding-an-opc-ua-device-via-ua-cloud-publisher)
+  - [Onboarding a Non-OPC UA Device (map it in UA Edge Translator first)](#onboarding-a-non-opc-ua-device-map-it-in-ua-edge-translator-first)
+  - [Querying Data in the InfluxDB Dashboard](#querying-data-in-the-influxdb-dashboard)
+
 ## Reference Edge Hardware
 
 The reference solution is validated on a compact, fanless industrial PC built
@@ -11,10 +30,7 @@ OPC UA / cloud reference workloads.
 
 ### Bill of Materials (Purchasing)
 
-Purchase the following components from Waveshare. The CM5 module and the
-NVMe SSD are **not** included with the enclosure and must be ordered separately.
-A USB-to-M.2 adapter is required to image the SSD from a separate PC before it is
-installed into the enclosure.
+Purchase the following components from Waveshare as a complete kit:
 
 | # | Component | Description | Product Page |
 |---|-----------|-------------|--------------|
@@ -22,11 +38,6 @@ installed into the enclosure.
 | 2 | **Raspberry Pi Compute Module 5** | The system-on-module (BCM2712 quad-core Cortex-A76). Select a variant **without eMMC** (not needed) and RAM (e.g. 8 GB RAM) and optionally wireless to match your needs. | <https://www.waveshare.com/compute-module-5.htm> |
 | 3 | **SK NVMe 2242 128G SSD (M.2)** | 128 GB M.2 2242 NVMe SSD used for the operating system and application data storage. | <https://www.waveshare.com/sk-nvme-2242-128g-ssd-m.2.htm> |
 | 4 | **USB-to-M.2 (NVMe) adapter / enclosure** | A USB 3.x adapter that accepts an **M-Key M.2 NVMe** SSD (2242 compatible). Used to connect the SSD to a separate PC so it can be imaged with Raspberry Pi Imager before final assembly. | <https://www.waveshare.com/usb-to-sata.htm> |
-
-> **Ordering notes**
-> - You will also need (not sold with the kit): a compatible **DC power supply**
->   within the enclosure's rated input range (7V to 36V), an Ethernet cable (if used), and a
->   separate PC (Windows, macOS, or Linux) to run Raspberry Pi Imager.
 
 ### Software Installation (Imaging the SSD)
 
@@ -79,7 +90,7 @@ USB-to-M.2 adapter and Raspberry Pi Imager. Do this before assembling the unit.
 6. **Connect peripherals.** Attach the Ethernet cable, and (optionally, for
    first-time console access) an HDMI monitor and USB keyboard.
 7. **Connect power.** Wire the DC input within the enclosure's rated voltage
-   range (7V to 36V, so a 24V industrial power supply is ideal) to the power terminal / jack and switch it on. The power/status LED
+   range (7V to 36V, so a 24V industrial power supply is ideal, or simply use the supplied AC/DC adapter for bench testing) to the power terminal / jack and switch it on. The power/status LED
    should illuminate and the device will boot from the NVMe SSD.
 
 #### First-Boot Configuration
@@ -194,7 +205,7 @@ kubectl get nodes
    All pods should reach `Running`/`Ready`, and each `LoadBalancer` Service should
    receive an `EXTERNAL-IP` (the node's IP).
 
-   If the external IP address for some Kubernetes services shows as <pending>, use the following command to assign the external IP address of the traefik service: sudo kubectl patch service <theService> -p '{"spec": {"type": "LoadBalancer", "externalIPs":["<the traefik external IP address>"]}}'.
+   If the external IP address for some Kubernetes services shows as `<pending>`, use the following command to assign the external IP address of the traefik service: sudo kubectl patch service <theService> -p '{"spec": {"type": "LoadBalancer", "externalIPs":["<the traefik external IP address>"]}}'.
 
 ### Where Telemetry Data Is Persisted
 
@@ -353,44 +364,43 @@ that query data using the **Flux** language.
 3. Data written by Telegraf lands in the **`mqtt`** bucket under the measurements
    **`opcua_pubsub`** (live values) and **`opcua_metadata`** (schema/metadata).
 
-**Example Flux queries** (paste into a Data Explorer / dashboard cell in
-**Script Editor** mode):
+**Example Flux query** (paste into a Data Explorer / dashboard cell in
+**Script Editor** mode). This joins the live `opcua_pubsub` data with the
+`opcua_metadata` schema on `datasetWriterId` so each series is labelled with its
+human-readable metadata name:
 
-- Show all published values over the last 15 minutes:
-
-  ```flux
+```flux
+data =
   from(bucket: "mqtt")
-    |> range(start: -15m)
-    |> filter(fn: (r) => r._measurement == "opcua_pubsub")
-  ```
+    |> range(start: v.timeRangeStart, stop: v.timeRangeStop)
+    |> filter(fn: (r) =>
+      r._measurement == "opcua_pubsub" and
+      r._field == "Payload_VoltageL-N_Value_C"
+    )
+    |> keep(columns: ["_time", "_value", "datasetWriterId"])
+    |> group(columns: ["datasetWriterId"])
+    |> sort(columns: ["_time"])
 
-- Filter to a specific publisher and dataset writer:
-
-  ```flux
+meta =
   from(bucket: "mqtt")
-    |> range(start: -1h)
-    |> filter(fn: (r) => r._measurement == "opcua_pubsub")
-    |> filter(fn: (r) => r.publisher == "MyPublisher")
-    |> filter(fn: (r) => r.datasetWriterId == "1")
-  ```
+    |> range(start: -30d)
+    |> filter(fn: (r) =>
+      r._measurement == "opcua_metadata" and
+      r._field == "cfgMajor"
+    )
+    |> group(columns: ["datasetWriterId"])
+    |> last()
+    |> keep(columns: ["datasetWriterId", "metaName"])
+    |> group(columns: ["datasetWriterId"])
 
-- Chart a single numeric field, e.g. a payload value, aggregated per minute:
-
-  ```flux
-  from(bucket: "mqtt")
-    |> range(start: -6h)
-    |> filter(fn: (r) => r._measurement == "opcua_pubsub")
-    |> filter(fn: (r) => r._field == "Payload_Temperature_Value")
-    |> aggregateWindow(every: 1m, fn: mean, createEmpty: false)
-  ```
-
-- Inspect the metadata (schema) messages:
-
-  ```flux
-  from(bucket: "mqtt")
-    |> range(start: -24h)
-    |> filter(fn: (r) => r._measurement == "opcua_metadata")
-  ```
+join(tables: {d: data, m: meta}, on: ["datasetWriterId"], method: "inner")
+  |> map(fn: (r) => ({
+      _time: r._time,
+      _value: float(v: r._value),
+      _source: r.datasetWriterId,
+      _tagName: r.metaName
+  }))
+```
 
 > **Tip:** Use the Data Explorer's visual **Query Builder** to discover the exact
 > `_field` names available (they mirror the OPC UA PubSub payload keys, e.g.
