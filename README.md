@@ -25,8 +25,8 @@ installed into the enclosure.
 
 > **Ordering notes**
 > - You will also need (not sold with the kit): a compatible **DC power supply**
->   within the enclosure's rated input range, an **Ethernet cable**, and a
->   **separate PC** (Windows, macOS, or Linux) to run Raspberry Pi Imager.
+>   within the enclosure's rated input range (7V to 36V), an Ethernet cable (if used), and a
+>   separate PC (Windows, macOS, or Linux) to run Raspberry Pi Imager.
 
 ### Software Installation (Imaging the SSD)
 
