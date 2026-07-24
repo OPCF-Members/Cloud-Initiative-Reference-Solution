@@ -117,7 +117,7 @@ from industrial protocols to a time-series database:
 | Component | Image | Role | Ports |
 |-----------|-------|------|-------|
 | **ua-edgetranslator** | `ghcr.io/opcfoundation/ua-edgetranslator:main` | OPC Foundation **UA Edge Translator** — connects to southbound assets and translates protocols (LoRaWAN, OCPP, etc.) into an OPC UA information model. Exposes a web UI for configuration. | 4840 (OPC UA server), 5000/5001 (LoRaWAN), 19520/19521 (OCPP), **8080 (web UI)** |
-| **ua-cloudpublisher** | `ghcr.io/barnstee/ua-cloudpublisher:main` | **UA Cloud Publisher** — subscribes to OPC UA data (from the edge translator) and publishes it as **OPC UA PubSub** JSON messages to the MQTT broker. Exposes a web UI for configuration. | **8080 (web UI)** |
+| **ua-cloudpublisher** | `ghcr.io/barnstee/ua-cloudpublisher:main` | **UA Cloud Publisher** — subscribes to OPC UA data (from the edge translator) and publishes it as **OPC UA PubSub** JSON messages to the MQTT broker. Exposes a web UI for configuration. | **8081 (web UI)** |
 | **mosquitto** | `eclipse-mosquitto:2.0.18` | **Eclipse Mosquitto** MQTT broker that carries the OPC UA PubSub `data/#` and `metadata` messages between the publisher and Telegraf. Configured via `mosquitto-conf` (anonymous access, listener on 1883). | 1883 (MQTT) |
 | **telegraf** | `telegraf:1.37-alpine` | **Telegraf** agent that consumes the MQTT PubSub messages, parses them with the `json_v2` parser (defined in the `telegraf-conf` ConfigMap), and writes them into InfluxDB. Measurements: `opcua_pubsub` (data) and `opcua_metadata` (metadata). | — |
 | **influxdb** | `influxdb:2.7` | **InfluxDB 2.7** time-series database that stores the ingested telemetry. Initialized with org `iot`, bucket `mqtt`, and admin user `myUsername`. Exposes a web UI (Data Explorer / dashboards). | **8086 (web UI/API)** |
@@ -128,8 +128,8 @@ Data flow:
 
 ```
 Assets → ua-edgetranslator → ua-cloudpublisher → Mosquitto (MQTT) → Telegraf → InfluxDB
-         (OPC UA / protocol      (OPC UA PubSub                     (json_v2      (time-series
-          translation)            JSON over MQTT)                    parsing)      storage + UI)
+         (OPC UA / protocol  (OPC UA PubSub                         (json_v2   (time-series
+          translation)        JSON over MQTT)                        parsing)   storage + UI)
 ```
 
 > **Security note:** the manifest ships with placeholder credentials
