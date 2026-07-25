@@ -28,7 +28,7 @@ around the Raspberry Pi Compute Module 5 (CM5). This platform provides an
 industrial-grade, DIN-rail-mountable edge gateway suitable for running the
 OPC UA / cloud reference workloads.
 
-![Waveshare IPCBox-CM5](CM5.png)
+<img src="CM5.png" alt="Waveshare IPCBox-CM5" width="50%" />
 
 ### Bill of Materials (Purchasing)
 
