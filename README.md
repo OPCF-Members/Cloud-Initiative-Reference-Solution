@@ -26,7 +26,7 @@ OPC Foundation Cloud Initiative Open-Source Reference Solution
 The reference solution is validated on a compact, fanless industrial PC built
 around the Raspberry Pi Compute Module 5 (CM5). This platform provides an
 industrial-grade, DIN-rail-mountable edge gateway suitable for running the
-OPC UA / cloud reference workloads.
+OPC Foundation Cloud Initiative open-source reference workloads.
 
 <img src="CM5.png" alt="Waveshare IPCBox-CM5" width="25%" />
 
