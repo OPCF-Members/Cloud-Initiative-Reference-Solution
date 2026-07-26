@@ -20,9 +20,9 @@ spec:
         imagePullPolicy: IfNotPresent
         env:
         - name: OPCUA_USERNAME
-          value: "myUsername"
+          value: "${IOT_USERNAME}"
         - name: OPCUA_PASSWORD
-          value: "myPassword"
+          value: "${IOT_PASSWORD}"
         ports:
         - containerPort: 4840
         - containerPort: 5000
@@ -102,10 +102,14 @@ spec:
         image: ghcr.io/barnstee/ua-cloudpublisher:main
         imagePullPolicy: IfNotPresent
         env:
+        - name: PUBLISHER_USERNAME
+          value: "${IOT_USERNAME}"
+        - name: PUBLISHER_PASSWORD
+          value: "${IOT_PASSWORD}"
         - name: OPCUA_USERNAME
-          value: "myUsername"
+          value: "${IOT_USERNAME}"
         - name: OPCUA_PASSWORD
-          value: "myPassword"
+          value: "${IOT_PASSWORD}"
         ports:
         - containerPort: 8080
         volumeMounts:
@@ -171,10 +175,13 @@ data:
     # MQTT → consume OPC UA PubSub JSON data messages and parse it on ingest (json_v2)
     ##################################################################################
     [[inputs.mqtt_consumer]]
-      servers = ["tcp://mosquitto.default.svc.cluster.local:1883"]
+      servers = ["ssl://mosquitto.default.svc.cluster.local:8883"]
       topics  = ["data/#"]
       qos     = 1
       client_id = "telegraf-mqtt-data"
+      username = "${IOT_USERNAME}"
+      password = "${IOT_PASSWORD}"
+      insecure_skip_verify = true
       connection_timeout = "30s"
       persistent_session = false
 
@@ -229,10 +236,13 @@ data:
     #   - extract MetaData.Name and first Field details (Fields[0].*)
     ###########################################################################
     [[inputs.mqtt_consumer]]
-      servers = ["tcp://mosquitto.default.svc.cluster.local:1883"]
+      servers = ["ssl://mosquitto.default.svc.cluster.local:8883"]
       topics  = ["metadata"]
       qos     = 1
       client_id = "telegraf-mqtt-metadata"
+      username = "${IOT_USERNAME}"
+      password = "${IOT_PASSWORD}"
+      insecure_skip_verify = true
       connection_timeout = "30s"
       persistent_session = false
       topic_tag = "mqtt_topic"
@@ -337,9 +347,14 @@ data:
     persistence true
     persistence_location /mosquitto/data/
     log_dest stdout
-    allow_anonymous true
-    listener 1883
-    # For production, consider enabling authentication and TLS
+    allow_anonymous false
+    password_file /mosquitto/data/passwd
+    listener 8883
+    cafile /mosquitto/certs/ca.crt
+    certfile /mosquitto/certs/server.crt
+    keyfile /mosquitto/certs/server.key
+    # TLS + username/password authentication are enabled. For production,
+    # replace the self-signed certificates with ones from a trusted CA.
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -355,26 +370,63 @@ spec:
       labels:
         app: mosquitto
     spec:
+      initContainers:
+        - name: gen-certs
+          image: alpine/openssl:latest
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              cd /certs
+              # Self-signed CA
+              openssl req -new -x509 -days 3650 -nodes \
+                -subj "/CN=Mosquitto Demo CA" \
+                -keyout ca.key -out ca.crt
+              # Server key + CSR
+              openssl genrsa -out server.key 2048
+              openssl req -new -key server.key \
+                -subj "/CN=mosquitto.default.svc.cluster.local" \
+                -out server.csr
+              # Sign the server cert with SANs for in-cluster and local access
+              printf "subjectAltName=DNS:mosquitto,DNS:mosquitto.default.svc.cluster.local,DNS:localhost,IP:127.0.0.1\n" > san.cnf
+              openssl x509 -req -in server.csr -CA ca.crt -CAkey ca.key \
+                -CAcreateserial -days 3650 -out server.crt -extfile san.cnf
+              chmod 644 ca.crt server.crt server.key
+          volumeMounts:
+            - name: mosquitto-certs
+              mountPath: /certs
       containers:
         - name: mosquitto
           image: eclipse-mosquitto:2.0.18
           imagePullPolicy: IfNotPresent
+          env:
+            - name: MOSQUITTO_USERNAME
+              value: "${IOT_USERNAME}"
+            - name: MOSQUITTO_PASSWORD
+              value: "${IOT_PASSWORD}"
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              mosquitto_passwd -b -c /mosquitto/data/passwd "$MOSQUITTO_USERNAME" "$MOSQUITTO_PASSWORD"
+              exec /usr/sbin/mosquitto -c /mosquitto/config/mosquitto.conf
           ports:
-            - containerPort: 1883
-              name: mqtt
+            - containerPort: 8883
+              name: mqtts
           volumeMounts:
             - name: mosquitto-conf
               mountPath: /mosquitto/config
             - name: mosquitto-data
               mountPath: /mosquitto/data
+            - name: mosquitto-certs
+              mountPath: /mosquitto/certs
           livenessProbe:
             tcpSocket:
-              port: mqtt
+              port: mqtts
             initialDelaySeconds: 5
             periodSeconds: 10
           readinessProbe:
             tcpSocket:
-              port: mqtt
+              port: mqtts
             initialDelaySeconds: 5
             periodSeconds: 10
       volumes:
@@ -386,6 +438,8 @@ spec:
                 path: mosquitto.conf
         - name: mosquitto-data
           emptyDir: {}
+        - name: mosquitto-certs
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: Service
@@ -396,9 +450,9 @@ spec:
   selector:
     app: mosquitto
   ports:
-    - name: mqtt
-      port: 1883
-      targetPort: 1883
+    - name: mqtts
+      port: 8883
+      targetPort: 8883
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -428,9 +482,9 @@ spec:
             - name: DOCKER_INFLUXDB_INIT_MODE
               value: "setup"
             - name: DOCKER_INFLUXDB_INIT_USERNAME
-              value: "myUsername"
+              value: "${IOT_USERNAME}"
             - name: DOCKER_INFLUXDB_INIT_PASSWORD
-              value: "myPassword"
+              value: "${IOT_PASSWORD}"
             - name: DOCKER_INFLUXDB_INIT_ORG
               value: "iot"
             - name: DOCKER_INFLUXDB_INIT_BUCKET

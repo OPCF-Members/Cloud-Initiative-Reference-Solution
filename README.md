@@ -131,9 +131,9 @@ from industrial protocols to a time-series database:
 |-----------|-------|------|-------|
 | **ua-edgetranslator** | `ghcr.io/opcfoundation/ua-edgetranslator:main` | OPC Foundation **UA Edge Translator** — connects to southbound assets and translates protocols (LoRaWAN, OCPP, etc.) into an OPC UA information model. Exposes a web UI for configuration. | 4840 (OPC UA server), 5000/5001 (LoRaWAN), 19520/19521 (OCPP), **8080 (web UI)** |
 | **ua-cloudpublisher** | `ghcr.io/barnstee/ua-cloudpublisher:main` | **UA Cloud Publisher** — subscribes to OPC UA data (from the edge translator) and publishes it as **OPC UA PubSub** JSON messages to the MQTT broker. Exposes a web UI for configuration. | **8081 (web UI)** |
-| **mosquitto** | `eclipse-mosquitto:2.0.18` | **Eclipse Mosquitto** MQTT broker that carries the OPC UA PubSub `data/#` and `metadata` messages between the publisher and Telegraf. Configured via `mosquitto-conf` (anonymous access, listener on 1883). | 1883 (MQTT) |
+| **mosquitto** | `eclipse-mosquitto:2.0.18` | **Eclipse Mosquitto** MQTT broker that carries the OPC UA PubSub `data/#` and `metadata` messages between the publisher and Telegraf. Configured via `mosquitto-conf` (TLS + authentication required with the `IOT_USERNAME` / `IOT_PASSWORD` credentials supplied at apply time, exposed to the broker via the `MOSQUITTO_USERNAME` / `MOSQUITTO_PASSWORD` env vars, TLS listener on 8883). | 8883 (MQTT/TLS) |
 | **telegraf** | `telegraf:1.37-alpine` | **Telegraf** agent that consumes the MQTT PubSub messages, parses them with the `json_v2` parser (defined in the `telegraf-conf` ConfigMap), and writes them into InfluxDB. Measurements: `opcua_pubsub` (data) and `opcua_metadata` (metadata). | — |
-| **influxdb** | `influxdb:2.7` | **InfluxDB 2.7** time-series database that stores the ingested telemetry. Initialized with org `iot`, bucket `mqtt`, and admin user `myUsername`. Exposes a web UI (Data Explorer / dashboards). | **8086 (web UI/API)** |
+| **influxdb** | `influxdb:2.7` | **InfluxDB 2.7** time-series database that stores the ingested telemetry. Initialized with org `iot`, bucket `mqtt`, and admin user set to your `IOT_USERNAME`. Exposes a web UI (Data Explorer / dashboards). | **8086 (web UI/API)** |
 | **influxdb-auth** (Secret) | — | Holds the `INFLUX_TOKEN` used by InfluxDB (admin token) and Telegraf (write token). Provided at deploy time via the `${INFLUX_TOKEN}` variable. | — |
 | **telegraf-conf** / **mosquitto-conf** (ConfigMaps) | — | Configuration for Telegraf (MQTT inputs + InfluxDB output) and Mosquitto respectively. | — |
 
@@ -145,9 +145,13 @@ Assets → ua-edgetranslator → ua-cloudpublisher → Mosquitto (MQTT) → Tele
           translation)        JSON over MQTT)                        parsing)   storage + UI)
 ```
 
-> **Security note:** the manifest ships with placeholder credentials
-> (`myUsername` / `myPassword`) and anonymous MQTT access for demo purposes.
-> Change these before any production or exposed deployment.
+> **Security note:** you choose the credentials at deployment time via the
+> `IOT_USERNAME` / `IOT_PASSWORD` variables (see *Apply the Stack Manifest*),
+> used consistently across the Edge Translator,
+> Cloud Publisher, Mosquitto, and InfluxDB for demo purposes. Mosquitto uses a
+> self-signed TLS certificate generated at pod startup.
+> Change these and use certificates from a trusted CA before any production or
+> exposed deployment.
 
 ### Install K3s on the Pi
 
@@ -182,20 +186,30 @@ kubectl get nodes
 
 1. Copy `iot-stack.yaml` onto the device (e.g. with `git clone`, `scp`, or by
    pasting it into a file opened via a text editor like nano).
-2. Provide the InfluxDB token. The manifest references `${INFLUX_TOKEN}`, so
-   generate one and substitute it at apply time:
+2. Provide the deployment credentials and InfluxDB token. The manifest
+   references `${IOT_USERNAME}`, `${IOT_PASSWORD}`, and `${INFLUX_TOKEN}`, so set
+   them and substitute them at apply time:
 
    ```bash
-   # Generate a random token (or supply your own)
+   # Choose the shared username/password used by the Edge Translator,
+   # Cloud Publisher, Mosquitto broker, and InfluxDB.
+   # NOTE: InfluxDB requires the password to be at least 8 characters.
+   export IOT_USERNAME="myUsername"
+   export IOT_PASSWORD="ChangeMe123"
+
+   # Generate a random InfluxDB token (or supply your own)
    export INFLUX_TOKEN="$(openssl rand -hex 32)"
 
-   # Substitute the variable and apply
-   envsubst < iot-stack.yaml | kubectl apply -f -
+   # Substitute ONLY these variables and apply. Restricting the variable list is
+   # important so envsubst does not touch the runtime shell variables (e.g.
+   # $MOSQUITTO_USERNAME) used inside the container start-up commands.
+   envsubst '${IOT_USERNAME} ${IOT_PASSWORD} ${INFLUX_TOKEN}' < iot-stack.yaml | kubectl apply -f -
    ```
 
    > `envsubst` is part of the `gettext` package (`sudo apt install -y gettext-base`).
-   > Keep the generated `INFLUX_TOKEN` — you'll need it to authenticate Telegraf
-   > and to log into InfluxDB via the API.
+   > Keep the values you chose — you'll reuse `IOT_USERNAME` / `IOT_PASSWORD` to
+   > log into the web UIs and the broker, and the generated `INFLUX_TOKEN` to
+   > authenticate Telegraf and log into InfluxDB via the API.
 
 3. Watch the workloads come up:
 
@@ -241,9 +255,9 @@ Replace `<device-ip>` with the CM5's IP address (from `ip addr` or
 
 | Service | URL | Notes |
 |---------|-----|-------|
-| **UA Edge Translator** | `http://<device-ip>:8080` | Configure southbound asset connections and the OPC UA information model. Log in with `myUsername` / `myPassword` (from the manifest env vars). |
-| **UA Cloud Publisher** | `http://<device-ip>:8081` | Configure which OPC UA nodes to publish and the MQTT broker target (`mosquitto.default.svc.cluster.local:1883`). |
-| **InfluxDB** | `http://<device-ip>:8086` | Time-series UI, Data Explorer, and dashboards. Log in with `myUsername` / `myPassword` (org `iot`, bucket `mqtt`). |
+| **UA Edge Translator** | `http://<device-ip>:8080` | Configure southbound asset connections and the OPC UA information model. Log in with the `IOT_USERNAME` / `IOT_PASSWORD` you set (exposed via the manifest `OPCUA_USERNAME` / `OPCUA_PASSWORD` env vars). |
+| **UA Cloud Publisher** | `http://<device-ip>:8081` | Configure which OPC UA nodes to publish and the MQTT broker target (`mosquitto.default.svc.cluster.local:8883`, TLS). Log in with the `IOT_USERNAME` / `IOT_PASSWORD` you set (exposed via the manifest `PUBLISHER_USERNAME` / `PUBLISHER_PASSWORD` env vars). |
+| **InfluxDB** | `http://<device-ip>:8086` | Time-series UI, Data Explorer, and dashboards. Log in with the `IOT_USERNAME` / `IOT_PASSWORD` you set (org `iot`, bucket `mqtt`). |
 
 To keep both UIs reachable on the single node, the manifest publishes the Cloud Publisher Service on host port
  **8081** (mapped to the container's 8080) while the Edge Translator stays on **8080**. No extra steps are needed — just browse to `:8080` and `:8081` respectively.
@@ -271,26 +285,30 @@ The Cloud Publisher must be pointed at the in-cluster **Mosquitto** broker and,
 to populate the `opcua_metadata` measurement in InfluxDB, be told to **send OPC
 UA metadata**. All of this is done on the **Configuration** page.
 
-1. Open the **UA Cloud Publisher** UI at `http://<device-ip>:8081` and go to
+1. Open the **UA Cloud Publisher** UI at `http://<device-ip>:8081` (log in with
+   the `IOT_USERNAME` / `IOT_PASSWORD` you set, exposed via the manifest
+   `PUBLISHER_USERNAME` / `PUBLISHER_PASSWORD` env vars) and go to
    **Configuration**.
 2. Under **Broker Connection**, set the fields to match the stack's Mosquitto
-   Service (the broker listens on `1883` with anonymous access and **no TLS**):
+   Service (the broker listens on `8883` with **TLS** and username/password
+   authentication):
 
    | Field | Value | Notes |
    |-------|-------|-------|
    | **Publisher Name** | `UACloudPublisher` (or any unique name) | Becomes the `PublisherId` tag in InfluxDB. |
    | **Broker URL** | `mosquitto.default.svc.cluster.local` | In-cluster DNS name of the Mosquitto Service. Use the node IP if reaching it externally. |
-   | **Broker Port** | `1883` | Plain MQTT port (the manifest exposes 1883). |
-   | **Broker Username** | `myUsername` | Mosquitto is configured with `allow_anonymous true`, but the UI requires non-empty credentials — any value works. |
-   | **Broker Password** | `myPassword` | Same as above. |
+   | **Broker Port** | `8883` | TLS MQTT port (the manifest exposes 8883). |
+   | **Broker Username** | your `IOT_USERNAME` | Mosquitto is configured with `allow_anonymous false`, so these must match the `IOT_USERNAME` / `IOT_PASSWORD` supplied at apply time (exposed via `MOSQUITTO_USERNAME` / `MOSQUITTO_PASSWORD`). |
+   | **Broker Password** | your `IOT_PASSWORD` | Same as above. |
    | **Broker Message Topic** | `data` | Must match Telegraf's `data/#` subscription. |
 
-3. **Uncheck** **Use TLS with Broker** (Mosquitto in this stack is plaintext on
-   1883 — leaving TLS on will fail the connection).
+3. **Check** **Use TLS with Broker** (Mosquitto listens with TLS on 8883). The
+   broker presents a self-signed certificate generated at startup, so no client
+   CA configuration is required for the demo.
 4. **Uncheck** **Use Kafka** (this stack uses MQTT, not Kafka).
 5. Leave **Create Broker SAS Token**, **Use OPC UA certificate for
    authentication**, and **Use custom certificate for authentication** unchecked
-   (not needed for anonymous Mosquitto).
+   (Mosquitto uses username/password authentication, not certificates).
 
 To enable metadata (schema) messages that land in the `opcua_metadata`
 measurement:
@@ -313,12 +331,14 @@ measurement:
 Use this path when the device already speaks OPC UA (including data that the Edge
 Translator has already exposed).
 
-1. Open the **UA Cloud Publisher** UI at `http://<device-ip>:8081`.
+1. Open the **UA Cloud Publisher** UI at `http://<device-ip>:8081` (log in with
+   the `IOT_USERNAME` / `IOT_PASSWORD` you set, exposed via the manifest
+   `PUBLISHER_USERNAME` / `PUBLISHER_PASSWORD` env vars).
 2. Go to **OPC UA Connect** and enter the device's OPC UA endpoint URL, e.g.:
    - The Edge Translator: `opc.tcp://<device-ip>`
    - A standalone OPC UA device: `opc.tcp://<device-address>:<port>`
 3. Set the security policy and, if required, the credentials (`OPCUA_USERNAME` /
-   `OPCUA_PASSWORD`, default `myUsername` / `myPassword`) and click **Connect**.
+   `OPCUA_PASSWORD`, i.e. the `IOT_USERNAME` / `IOT_PASSWORD` you set) and click **Connect**.
    > On first connect the client and server exchange certificates. If the UA Cloud Publisher
    > connection is rejected, trust its certificate in the OPC UA device and retry.
 4. **Browse** the device's address space and select the variable nodes you want
@@ -364,7 +384,7 @@ published exactly like a native OPC UA device.
 InfluxDB 2.x includes a built-in UI with a **Data Explorer** and **Dashboards**
 that query data using the **Flux** language.
 
-1. Browse to `http://<device-ip>:8086` and sign in (`myUsername` / `myPassword`).
+1. Browse to `http://<device-ip>:8086` and sign in with the `IOT_USERNAME` / `IOT_PASSWORD` you set.
 2. Go to **Data Explorer** (the graph icon) to build and preview queries, or
    **Dashboards → Create Dashboard → Add Cell** to pin a query to a dashboard.
 3. Data written by Telegraf lands in the **`mqtt`** bucket under the measurements
