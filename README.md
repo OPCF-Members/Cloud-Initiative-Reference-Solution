@@ -20,6 +20,10 @@ OPC Foundation Cloud Initiative Open-Source Reference Solution
   - [Onboarding an OPC UA Device (via UA Cloud Publisher)](#onboarding-an-opc-ua-device-via-ua-cloud-publisher)
   - [Onboarding a Non-OPC UA Device (map it in UA Edge Translator first)](#onboarding-a-non-opc-ua-device-map-it-in-ua-edge-translator-first)
   - [Querying Data in the InfluxDB Dashboard](#querying-data-in-the-influxdb-dashboard)
+- [Security Analysis (STRIDE)](#security-analysis-stride)
+  - [Trust Boundaries and Assets](#trust-boundaries-and-assets)
+  - [STRIDE Threat Assessment](#stride-threat-assessment)
+  - [Production Hardening Recommendations](#production-hardening-recommendations)
 
 ## Reference Edge Hardware
 
@@ -437,3 +441,91 @@ join(tables: {d: data, m: meta}, on: ["datasetWriterId"], method: "inner")
 The device is now running the full OPC Foundation Cloud Initiative reference
 software stack, from protocol translation at the edge through to a queryable
 time-series dashboard.
+
+## Security Analysis (STRIDE)
+
+This section applies the **STRIDE** threat-modeling framework
+(**S**poofing, **T**ampering, **R**epudiation, **I**nformation disclosure,
+**D**enial of service, **E**levation of privilege) to the reference stack. It is
+intended to help you understand the residual risks of the **demo** configuration
+and what to change before an internet-exposed or production deployment.
+
+> **Important:** the reference manifest is optimized for a self-contained,
+> single-node demo. It ships with convenience defaults (shared credentials, a
+> self-signed broker certificate generated at pod start, `LoadBalancer` services
+> bound to the node IP, and permissive TLS verification in Telegraf). These are
+> **not** appropriate for production as-is — see
+> [Production Hardening Recommendations](#production-hardening-recommendations).
+
+### Trust Boundaries and Assets
+
+```
+[Field devices] --(OPC UA / Modbus / LoRaWAN / OCPP / HTTP)--> [UA Edge Translator]
+      |                                                                |
+      |  Boundary A: device <-> edge                                   | (OPC UA server :4840)
+      v                                                                v
+[UA Cloud Publisher] --(MQTT/TLS :8883, user/pass)--> [Mosquitto] --(MQTT/TLS)--> [Telegraf] --(HTTP + token)--> [InfluxDB]
+      ^                                                     ^                                                        ^
+      |  Boundary B: operator <-> web UIs (:8080/:8081/:8086, basic auth)                                           |
+      +------------------------------ Boundary C: node/cluster host (K3s, hostPath volumes) --------------------------+
+```
+
+Key assets: the telemetry data (in transit and at rest in InfluxDB), the shared
+`IOT_USERNAME` / `IOT_PASSWORD` credentials, the `INFLUX_TOKEN`, the broker's
+private key, and the K3s node itself (root of trust for all `hostPath` data).
+
+### STRIDE Threat Assessment
+
+| STRIDE category | Representative threats in this stack | Mitigations already in place | Residual risk / gaps |
+|-----------------|--------------------------------------|------------------------------|----------------------|
+| **Spoofing** (identity) | A rogue client impersonates the Publisher to the broker; an attacker impersonates a web UI user; a fake OPC UA server feeds the Publisher. | MQTT broker requires username/password (`allow_anonymous false`); all three web UIs require basic auth; OPC UA supports certificate exchange between Publisher and server. | Single shared credential set across all components; no per-service identities or mutual TLS (mTLS); broker does not authenticate clients by certificate. |
+| **Tampering** (integrity) | Modification of telemetry in transit; tampering with `hostPath` config/cert files on the node; editing the ConfigMaps. | MQTT is carried over TLS (8883); config is delivered via Kubernetes ConfigMaps/Secrets. | Telegraf uses `insecure_skip_verify = true`, so a man-in-the-middle with any cert is accepted; `hostPath` volumes (`/influxdb2`, `/translator/*`, `/publisher/*`) are writable by anyone with node access; no message signing/integrity checks on payloads. |
+| **Repudiation** (auditability) | An operator changes a device mapping or publish set and denies it; no record of who logged in. | Component logs are written to `hostPath` `logs` directories and pod stdout. | No centralized, tamper-evident audit log; shared credentials make actions unattributable to an individual; no log shipping or retention policy. |
+| **Information disclosure** (confidentiality) | Sniffing telemetry; reading credentials from the manifest; exposed dashboards. | MQTT is encrypted with TLS; `INFLUX_TOKEN` is stored in a Kubernetes `Secret`; credentials are supplied at apply time (not committed to git). | Credentials are injected as plain-text env vars (visible via `kubectl describe`/`exec`); Kubernetes Secrets are base64, not encrypted at rest by default; self-signed broker cert offers encryption but no server-identity assurance; all UIs are exposed on the node IP with no network policy. |
+| **Denial of service** (availability) | Flooding the broker or web UIs; filling the node disk with telemetry; a crash loop. | Liveness/readiness probes restart unhealthy pods; single-replica deployments recover automatically. | No rate limiting, quotas, or `resources` requests/limits on any pod; unbounded InfluxDB growth on the local SSD; a single node is a single point of failure; broker uses `emptyDir` (queued messages lost on restart). |
+| **Elevation of privilege** (authorization) | Container escape to the node; a compromised pod reading another component's data via shared host paths; using the InfluxDB admin token for full DB control. | Distinct container images per component; `nodeSelector` pins workloads to Linux. | Containers run with default (often root) user and no `securityContext`; no `NetworkPolicy` isolation between pods; the InfluxDB token is an all-powerful admin token; no RBAC scoping for the workloads. |
+
+### Production Hardening Recommendations
+
+The following changes move the stack from a demo toward a production-grade
+deployment. Prioritize the items marked **(High)**.
+
+1. **Use unique, per-service credentials (High).** Replace the single shared
+   `IOT_USERNAME` / `IOT_PASSWORD` with distinct identities for the Translator UI,
+   Publisher UI, broker client, and InfluxDB admin. Store them in a real secrets
+   manager (e.g. HashiCorp Vault, Sealed Secrets, or an external secrets
+   operator) rather than plain-text env vars.
+2. **Deploy trusted TLS certificates and enforce verification (High).** Replace
+   the self-signed, pod-generated broker certificate with one from a trusted CA
+   (e.g. via **cert-manager**). Remove `insecure_skip_verify = true` from the
+   Telegraf MQTT inputs and pin the broker CA so man-in-the-middle attacks are
+   prevented. Enable TLS on the web UIs (terminate at an ingress).
+3. **Enable mutual TLS (mTLS) or per-client auth on the broker.** Configure
+   Mosquitto to authenticate publishers/subscribers by client certificate in
+   addition to username/password, and use ACLs to restrict which topics each
+   client may publish/subscribe to.
+4. **Scope the InfluxDB token (High).** Do not use the all-powerful admin token
+   for Telegraf. Create a dedicated write-only token limited to the `mqtt`
+   bucket, and separate read tokens for dashboards.
+5. **Restrict network exposure (High).** Do not expose `LoadBalancer` services
+   directly on the node IP. Front the web UIs with an authenticating reverse
+   proxy/ingress, place the broker and database on an internal network only, and
+   add Kubernetes **`NetworkPolicy`** rules so pods can only reach the peers they
+   need.
+6. **Harden the pods.** Add a `securityContext` (`runAsNonRoot: true`,
+   `readOnlyRootFilesystem: true`, drop Linux capabilities,
+   `allowPrivilegeEscalation: false`) and set CPU/memory `requests`/`limits` to
+   contain resource-exhaustion and blast radius.
+7. **Protect data at rest.** Enable encryption at rest for the node's disk
+   (`/influxdb2` and the other `hostPath` volumes) and for Kubernetes Secrets
+   (e.g. a KMS provider or an encrypted etcd). Replace ad-hoc `hostPath` volumes
+   with managed `PersistentVolumeClaims` where possible.
+8. **Add auditing and monitoring.** Ship component and access logs to a central,
+   tamper-evident store; enable Kubernetes audit logging; and add alerting on
+   authentication failures, pod restarts, and disk usage.
+9. **Manage capacity and availability.** Set InfluxDB retention policies to bound
+   growth, back up `/influxdb2` regularly, and consider multi-node/HA for the
+   broker and database to remove the single-point-of-failure.
+10. **Keep software patched.** Pin and regularly update the container image
+    versions, apply OS/K3s security updates, and scan images for known
+    vulnerabilities as part of your release process.
