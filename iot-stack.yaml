@@ -961,13 +961,18 @@ spec:
         image: ghcr.io/opcfoundation/ua-cloudaction:main
         imagePullPolicy: IfNotPresent
         env:
-        # --- Web UI login ---
+        # --- Web UI / OPC UA Web API login ---
         - name: ADMIN_USERNAME
           value: "${IOT_USERNAME}"
         - name: ADMIN_PASSWORD
           value: "${IOT_PASSWORD}"
         - name: ASPNETCORE_URLS
           value: "http://+:8080"
+        # --- OPC UA Web API rate limiter (per client IP, fixed window) ---
+        - name: RATE_LIMIT_PERMIT
+          value: "60"
+        - name: RATE_LIMIT_WINDOW_SECONDS
+          value: "60"
         # --- Data source: query InfluxDB instead of Azure Data Explorer ---
         - name: DATA_SOURCE
           value: "InfluxDB"

@@ -730,15 +730,23 @@ http://<device-ip>:8082
 
 - The **OpenAPI/Swagger** definition (e.g. `http://<device-ip>:8082/swagger`)
   describes every available route and schema — point your tooling at it to explore
-  or generate clients.
+  or generate clients. In the interactive **Swagger UI**, use the **Authorize**
+  button to supply the Basic credentials before invoking the `/opcua/read` and
+  `/opcua/historyread` operations.
 - **Authentication is mandatory.** The UA Cloud Action web UI and Web API require
   **HTTP Basic authentication** on every request — there is no anonymous access.
   Supply the `IOT_USERNAME` / `IOT_PASSWORD` credentials (set via the manifest's
   `ADMIN_USERNAME` / `ADMIN_PASSWORD`) in the HTTP `Authorization: Basic <base64>`
-  header. Requests without valid credentials are rejected.
+  header. Unauthenticated requests receive `401 Unauthorized` with a
+  `WWW-Authenticate: Basic` challenge.
   > The OPC UA Web API specification also allows bearer/JWT tokens in the
   > `Authorization` header (the reference gateway uses OAuth2 JWTs); Basic auth is
   > what this reference deployment mandates.
+- **The API is rate limited** per client IP using a fixed window. The limit and
+  window are configurable via the `RATE_LIMIT_PERMIT` and
+  `RATE_LIMIT_WINDOW_SECONDS` environment variables (defaulting to **60 requests
+  per 60 seconds** in `iot-stack.yaml`). Requests exceeding the limit receive
+  `429 Too Many Requests`.
 - Behind the OPC UA Web API, UA Cloud Action forwards the requested service to the
   target OPC UA server (e.g. the Edge Translator at
   `opc.tcp://ua-edgetranslator.default.svc.cluster.local:4840`).
