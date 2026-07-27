@@ -27,6 +27,9 @@ OPC Foundation Cloud Initiative Open-Source Reference Solution
   - [How It Is Configured](#how-it-is-configured)
   - [Sending a Command](#sending-a-command)
   - [Automated Feedback Loop with UA Cloud Action](#automated-feedback-loop-with-ua-cloud-action)
+- [Accessing the OPC UA Web API (UA Cloud Action)](#accessing-the-opc-ua-web-api-ua-cloud-action)
+  - [Reaching the Web API](#reaching-the-web-api)
+  - [Building Custom Apps with the Starter Kit](#building-custom-apps-with-the-starter-kit)
 - [Security Analysis (STRIDE)](#security-analysis-stride)
   - [Trust Boundaries and Assets](#trust-boundaries-and-assets)
   - [STRIDE Threat Assessment](#stride-threat-assessment)
@@ -696,6 +699,82 @@ and drive Commander over Mosquitto:
 A small status UI is available at `http://<device-ip>:8082` (log in with your
 `IOT_USERNAME` / `IOT_PASSWORD`), showing connectivity to the data source, the
 broker, and Cloud Commander.
+
+## Accessing the OPC UA Web API (UA Cloud Action)
+
+In addition to the MQTT-based feedback loop, **UA Cloud Action** exposes an
+**OPC UA Web API** — a RESTful, [OpenAPI](https://swagger.io/specification/)-based
+HTTP interface to the standard OPC UA services defined in
+[OPC UA Part 4](https://reference.opcfoundation.org/Core/Part4/v105/docs/)
+(`Read`, `Write`, `Browse`, `Call`, `HistoryRead`, etc.). This lets you build
+**custom applications** — dashboards, mobile apps, analytics jobs, or backend
+integrations — that talk to the edge's OPC UA servers over plain HTTP/JSON,
+without embedding a native OPC UA stack.
+
+> **Note:** the Web API is being implemented in UA Cloud Action. The endpoints and
+> auth described below track the OPC UA Web API specification; confirm the exact
+> routes against the running service's OpenAPI/Swagger document.
+
+### Reaching the Web API
+
+The API is served by the `ua-cloudaction` container and reachable through its
+Service at:
+
+```
+http://<device-ip>:8082
+```
+
+- The **OpenAPI/Swagger** definition (e.g. `http://<device-ip>:8082/swagger`)
+  describes every available route and schema — point your tooling at it to explore
+  or generate clients.
+- Requests authenticate with the same `IOT_USERNAME` / `IOT_PASSWORD` (or a
+  bearer/JWT token, per the OPC UA Web API spec — the reference gateway uses OAuth2
+  JWTs passed in the HTTP `Authorization` header).
+- Behind the OPC UA Web API, UA Cloud Action forwards the requested service to the
+  target OPC UA server (e.g. the Edge Translator at
+  `opc.tcp://ua-edgetranslator.default.svc.cluster.local:4840`).
+
+### Building Custom Apps with the Starter Kit
+
+Use the OPC Foundation
+[UA Web API Starter Kit](https://github.com/OPCFoundation/UA-WebApi-StarterKit/tree/master/UaWebApiClient)
+as the starting point. Its `UaWebApiClient` folder contains ready-to-run sample
+clients in several environments that call the OPC UA Web API using pre-built
+**stubs** (classes/constants for the OPC UA services, `BrowseName`s, and
+`NodeId`s):
+
+| Sample client | Language / stubs |
+|---------------|------------------|
+| `UaWebApiClient/csharp` | C# — [DotNet stubs](https://github.com/OPCFoundation/opcua-webapi-dotnet) |
+| `UaWebApiClient/nodejs` | JavaScript — [TypeScript stubs](https://github.com/OPCFoundation/opcua-webapi-typescript) |
+| `UaWebApiClient/react`  | TypeScript (browser) — TypeScript stubs |
+| `UaWebApiClient/python` | Python — [Python stubs](https://github.com/OPCFoundation/opcua-webapi-python) |
+
+Typical workflow to build your own app:
+
+1. **Clone the starter kit** and pick the sample client that matches your stack:
+   ```bash
+   git clone https://github.com/OPCFoundation/UA-WebApi-StarterKit.git
+   cd UA-WebApi-StarterKit/UaWebApiClient
+   ```
+2. **Point the client at your Web API endpoint** — set its base URL to
+   `http://<device-ip>:8082` (the UA Cloud Action Web API) and configure the
+   `Authorization` header with your credentials/JWT.
+3. **Use the pre-built stubs** to invoke OPC UA services (`Browse` the address
+   space, `Read`/`Write` variables, `Call` methods, `HistoryRead`) with typed
+   requests/responses instead of hand-crafting JSON.
+4. **(Optional) Generate model-specific classes.** For DataTypes from a custom
+   information model, convert its NodeSet to an OpenAPI schema with the
+   [Opc.Ua.ModelCompiler](https://github.com/OPCFoundation/UA-ModelCompiler), then
+   generate typed classes with the
+   [OpenAPI Generator](https://openapi-generator.tech/) — exactly as the starter
+   kit does — so your app understands the model's structured values.
+5. **Iterate from a sample** — start from the closest `UaWebApiClient` sample and
+   extend it into your own dashboard, service, or integration.
+
+> Because the interface is standard OpenAPI, you can also generate a client in any
+> other language supported by the OpenAPI Generator directly from the service's
+> OpenAPI document, rather than using the pre-built stubs.
 
 ## Security Analysis (STRIDE)
 
