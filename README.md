@@ -16,11 +16,9 @@ OPC Foundation Cloud Initiative Open-Source Reference Solution
   - [Where Telemetry Data Is Persisted](#where-telemetry-data-is-persisted)
 - [Accessing the Web UIs](#accessing-the-web-uis)
 - [Managing the Cluster with Portainer](#managing-the-cluster-with-portainer)
-- [Onboarding Devices](#onboarding-devices)
-  - [Configuring the Broker Connection and Metadata (UA Cloud Publisher)](#configuring-the-broker-connection-and-metadata-ua-cloud-publisher)
-  - [Onboarding an OPC UA Device (via UA Cloud Publisher)](#onboarding-an-opc-ua-device-via-ua-cloud-publisher)
-  - [Onboarding a Non-OPC UA Device (map it in UA Edge Translator first)](#onboarding-a-non-opc-ua-device-map-it-in-ua-edge-translator-first)
-  - [Querying Data in the InfluxDB Dashboard](#querying-data-in-the-influxdb-dashboard)
+- [Onboarding an OPC UA Device](#onboarding-an-opc-ua-device)
+- [Onboarding a Non-OPC UA Device](#onboarding-a-non-opc-ua-device)
+- [Querying Data in the InfluxDB Dashboard](#querying-data-in-the-influxdb-dashboard)
 - [Dashboards with Grafana](#dashboards-with-grafana)
 - [Importing an OPC UA Information Model into InfluxDB (UA Cloud Library)](#importing-an-opc-ua-information-model-into-influxdb-ua-cloud-library)
 - [Command & Control with UA Cloud Commander](#command--control-with-ua-cloud-commander)
@@ -314,19 +312,6 @@ First-time setup:
    Publisher, Cloud Commander, Mosquitto, Telegraf, and InfluxDB workloads, view
    their logs, exec into containers, and monitor cluster resources.
 
-## Onboarding Devices
-
-Devices are brought into the pipeline in two stages:
-
-1. **UA Edge Translator** exposes device data as an **OPC UA server** (endpoint
-   `opc.tcp://<device-ip>:4840`). Native OPC UA devices can be published directly,
-   while **non-OPC UA devices** are first *mapped* into the translator's OPC UA
-   information model.
-2. **UA Cloud Publisher** connects to an OPC UA server (typically the Edge
-   Translator, or any other OPC UA device), browses its address space, and
-   selects which nodes to publish to MQTT — from where the data flows through
-   Telegraf into InfluxDB.
-
 ## Onboarding an OPC UA Device
 
 Use this path when the device already speaks OPC UA (including data that the Edge
@@ -374,7 +359,7 @@ published exactly like a native OPC UA device.
 
    All asset tags specified in the Thing Description as properties are automatically published.
 
-### Querying Data in the InfluxDB Dashboard
+## Querying Data in the InfluxDB Dashboard
 
 InfluxDB 2.x includes a built-in UI with a **Data Explorer** and **Dashboards**
 that query data using the **Flux** language.
