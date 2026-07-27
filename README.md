@@ -154,6 +154,7 @@ from industrial protocols to a time-series database:
 | **portainer** | `portainer/portainer-ce:2.21.4` | **Portainer CE** — web UI to manage the single-node K3s cluster (workloads, logs, shells, events). Runs with a `cluster-admin`-bound ServiceAccount so it manages the cluster in-cluster via the K3s API server. | **9443 (HTTPS UI)**, 9000 (HTTP UI), 8000 (edge tunnel) |
 | **influxdb-auth** (Secret) | — | Holds the `INFLUX_TOKEN` used by InfluxDB (admin token), Telegraf (write token), Grafana (query token), and UA Cloud Action (query token). Provided at deploy time via the `${INFLUX_TOKEN}` variable. | — |
 | **telegraf-conf** / **mosquitto-conf** (ConfigMaps) | — | Configuration for Telegraf (MQTT inputs + InfluxDB output) and Mosquitto respectively. | — |
+| **ua-cloudpublisher-settings** (ConfigMap) | — | Pre-populated `settings.json` seeded into the UA Cloud Publisher on first start (broker connection, topics, and OPC UA metadata), so no manual broker configuration is required. | — |
 
 Data flow:
 
@@ -326,58 +327,7 @@ Devices are brought into the pipeline in two stages:
    selects which nodes to publish to MQTT — from where the data flows through
    Telegraf into InfluxDB.
 
-> Before publishing any nodes, configure the Cloud Publisher's **broker
-> connection** so it knows where to send the OPC UA PubSub data and metadata —
-> see the next section.
-
-### Configuring the Broker Connection and Metadata (UA Cloud Publisher)
-
-The Cloud Publisher must be pointed at the in-cluster **Mosquitto** broker and,
-to populate the `opcua_metadata` measurement in InfluxDB, be told to **send OPC
-UA metadata**. All of this is done on the **Configuration** page.
-
-1. Open the **UA Cloud Publisher** UI at `http://<device-ip>:8081` (log in with
-   the `IOT_USERNAME` / `IOT_PASSWORD` you set, exposed via the manifest
-   `PUBLISHER_USERNAME` / `PUBLISHER_PASSWORD` env vars) and go to
-   **Configuration**.
-2. Under **Broker Connection**, set the fields to match the stack's Mosquitto
-   Service (the broker listens on `8883` with **TLS** and username/password
-   authentication):
-
-   | Field | Value | Notes |
-   |-------|-------|-------|
-   | **Publisher Name** | `UACloudPublisher` (or any unique name) | Becomes the `PublisherId` tag in InfluxDB. |
-   | **Broker URL** | `mosquitto.default.svc.cluster.local` | In-cluster DNS name of the Mosquitto Service. Use the node IP if reaching it externally. |
-   | **Broker Port** | `8883` | TLS MQTT port (the manifest exposes 8883). |
-   | **Broker Username** | your `IOT_USERNAME` | Mosquitto is configured with `allow_anonymous false`, so these must match the `IOT_USERNAME` / `IOT_PASSWORD` supplied at apply time (exposed via `MOSQUITTO_USERNAME` / `MOSQUITTO_PASSWORD`). |
-   | **Broker Password** | your `IOT_PASSWORD` | Same as above. |
-   | **Broker Message Topic** | `data` | Must match Telegraf's `data/#` subscription. |
-
-3. **Check** **Use TLS with Broker** (Mosquitto listens with TLS on 8883). The
-   broker presents a self-signed certificate generated at startup, so no client
-   CA configuration is required for the demo.
-4. **Uncheck** **Use Kafka** (this stack uses MQTT, not Kafka).
-5. Leave **Create Broker SAS Token**, **Use OPC UA certificate for
-   authentication**, and **Use custom certificate for authentication** unchecked
-   (Mosquitto uses username/password authentication, not certificates).
-
-To enable metadata (schema) messages that land in the `opcua_metadata`
-measurement:
-
-6. Check **Send OPC UA Metadata Messages**.
-7. Set **Broker Metadata Topic** to `metadata` — this must match Telegraf's
-   `metadata` topic subscription.
-8. Leave **Use Alternative Broker For OPC UA Metadata Messages** unchecked so
-   metadata goes to the same Mosquitto broker as the data.
-9. Click **Apply** to save. The settings are persisted to
-    `/publisher/settings/settings.json` on the Pi.
-
-> **Result:** data messages are published to `data` (consumed by Telegraf's
-> `data/#` input → `opcua_pubsub`) and metadata messages to `metadata` (consumed
-> by Telegraf's `metadata` input → `opcua_metadata`), both landing in the
-> InfluxDB `mqtt` bucket.
-
-## Onboarding an OPC UA Device (via UA Cloud Publisher)
+## Onboarding an OPC UA Device
 
 Use this path when the device already speaks OPC UA (including data that the Edge
 Translator has already exposed).
@@ -398,15 +348,17 @@ Translator has already exposed).
    describing each dataset to the `metadata` topic. Confirm data is flowing by checking the InfluxDB `mqtt` bucket (see
    [Querying Data in the InfluxDB Dashboard](#querying-data-in-the-influxdb-dashboard)).
 
-## Onboarding a Non-OPC UA Device (map it in UA Edge Translator first)
+## Onboarding a Non-OPC UA Device
 
 The UA Edge Translator uses **W3C Web of Things (WoT) Thing Descriptions (TDs)**
 to model a non-OPC UA asset (e.g. Modbus TCP, LoRaWAN, OCPP, or an HTTP/REST
 device) and expose its data points as OPC UA nodes. Once mapped, the device is
 published exactly like a native OPC UA device.
 
-1. Open the **UA Edge Translator** UI at `http://<device-ip>:8080`.
-2. **Add / define the asset** by providing a **WoT Thing Description** for it.
+1. Open the **UA Cloud Publisher** UI at `http://<device-ip>:8081` (log in with
+   the `IOT_USERNAME` / `IOT_PASSWORD` you set, exposed via the manifest
+   `PUBLISHER_USERNAME` / `PUBLISHER_PASSWORD` env vars).
+2. Go to **UA Edge Translator** and provide a **WoT Thing Description** for your asset.
    The Thing Description declares:
    - the **protocol binding** (e.g. `modbus+tcp://<device-ip>:502`, an OCPP/
      LoRaWAN endpoint, or an HTTP base URL),
@@ -420,15 +372,7 @@ published exactly like a native OPC UA device.
    The Edge Translator connects to the asset over its native protocol and instantiates the mapped data points as OPC
    UA nodes in its address space (served at `opc.tcp://<device-ip>:4840`).
 
-4. **Publish the mapped nodes** by following the
-   [Onboarding an OPC UA Device](#onboarding-an-opc-ua-device-via-ua-cloud-publisher)
-   steps above, pointing the Cloud Publisher at `opc.tcp://<device-ip>` and
-   selecting the newly mapped variables.
-
-> **Summary:** OPC UA devices → publish directly in the Cloud Publisher.
-> Non-OPC UA devices → first map them to OPC UA via a WoT Thing Description in the
-> Edge Translator, then publish those nodes in the Cloud Publisher. In both cases
-> the resulting telemetry lands in InfluxDB via Mosquitto and Telegraf.
+   All asset tags specified in the Thing Description as properties are automatically published.
 
 ### Querying Data in the InfluxDB Dashboard
 

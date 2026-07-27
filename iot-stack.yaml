@@ -97,6 +97,27 @@ spec:
     spec:
       nodeSelector:
         "kubernetes.io/os": linux
+      initContainers:
+      # Seed the broker connection / metadata configuration on first start so the
+      # "Configuring the Broker Connection and Metadata" UI steps are not needed.
+      # The file is only copied if the operator has not already saved settings,
+      # so any later changes made through the UI are preserved.
+      - name: seed-settings
+        image: busybox:1.36
+        command: ["/bin/sh", "-c"]
+        args:
+          - |
+            if [ ! -f /app/settings/settings.json ]; then
+              echo "Seeding default UA Cloud Publisher settings.json"
+              cp /seed/settings.json /app/settings/settings.json
+            else
+              echo "settings.json already present; leaving existing configuration untouched"
+            fi
+        volumeMounts:
+        - name: "settings"
+          mountPath: "/app/settings"
+        - name: "settings-seed"
+          mountPath: "/seed"
       containers:
       - name: ua-cloudpublisher
         image: ghcr.io/barnstee/ua-cloudpublisher:main
@@ -123,12 +144,73 @@ spec:
         - name: "settings"
           hostPath:
             path: "/publisher/settings"
+        - name: "settings-seed"
+          configMap:
+            name: ua-cloudpublisher-settings
+            items:
+              - key: settings.json
+                path: settings.json
         - name: "pki"
           hostPath:
             path: "/publisher/pki"
         - name: "logs"
           hostPath:
             path: "/publisher/logs"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ua-cloudpublisher-settings
+data:
+  # Pre-populated UA Cloud Publisher configuration that points the publisher at
+  # the in-cluster Mosquitto broker (TLS, 8883) and enables OPC UA metadata
+  # messages. Credentials are substituted from ${IOT_USERNAME}/${IOT_PASSWORD}
+  # at apply time (envsubst), matching the rest of the stack.
+  settings.json: |
+    {
+      "PublisherName": "UACloudPublisher",
+      "BrokerUrl": "mosquitto.default.svc.cluster.local",
+      "BrokerPort": 8883,
+      "BrokerUsername": "${IOT_USERNAME}",
+      "BrokerPassword": "${IOT_PASSWORD}",
+      "BrokerMessageTopic": "data",
+      "BrokerMetadataTopic": "metadata",
+      "SendUAMetadata": true,
+      "UseTLS": true,
+      "UseKafka": false,
+      "CreateBrokerSASToken": false,
+      "UseUACertAuth": false,
+      "UseCustomCertAuth": false,
+      "UseAltBrokerForMetadata": false,
+      "AltBrokerUrl": null,
+      "AltBrokerPort": 8883,
+      "AltBrokerUsername": null,
+      "AltBrokerPassword": null,
+      "SendUAStatus": false,
+      "SendUAConnection": true,
+      "SendDiagnosticsMessages": true,
+      "MetadataSendInterval": 300,
+      "BrokerCommandTopic": null,
+      "BrokerDataReceivedTopic": null,
+      "BrokerResponseTopic": null,
+      "BrokerMessageSize": 262144,
+      "UseReverseConnect": false,
+      "AutoPublishAllWoTProperties": true,
+      "PushCertsBeforePublishing": true,
+      "InternalQueueCapacity": 1000,
+      "DefaultSendIntervalSeconds": 1,
+      "DiagnosticsLoggingInterval": 30,
+      "DefaultOpcSamplingInterval": 500,
+      "DefaultOpcPublishingInterval": 1000,
+      "UAStackTraceMask": 645,
+      "ReversiblePubSubEncoding": false,
+      "OmitNetworkMessageHeader": true,
+      "UseCloudEventsMetadataHeader": false,
+      "AutoLoadPersistedNodes": true,
+      "AzureOpenAIAPIEndpoint": null,
+      "AzureOpenAIAPIKey": null,
+      "AzureOpenAIDeploymentName": null
+    }
 ---
 apiVersion: v1
 kind: Service
