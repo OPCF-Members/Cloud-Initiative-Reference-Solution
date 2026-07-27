@@ -15,11 +15,18 @@ OPC Foundation Cloud Initiative Open-Source Reference Solution
   - [Apply the Stack Manifest](#apply-the-stack-manifest)
   - [Where Telemetry Data Is Persisted](#where-telemetry-data-is-persisted)
 - [Accessing the Web UIs](#accessing-the-web-uis)
+- [Managing the Cluster with Portainer](#managing-the-cluster-with-portainer)
 - [Onboarding Devices](#onboarding-devices)
   - [Configuring the Broker Connection and Metadata (UA Cloud Publisher)](#configuring-the-broker-connection-and-metadata-ua-cloud-publisher)
   - [Onboarding an OPC UA Device (via UA Cloud Publisher)](#onboarding-an-opc-ua-device-via-ua-cloud-publisher)
   - [Onboarding a Non-OPC UA Device (map it in UA Edge Translator first)](#onboarding-a-non-opc-ua-device-map-it-in-ua-edge-translator-first)
   - [Querying Data in the InfluxDB Dashboard](#querying-data-in-the-influxdb-dashboard)
+- [Dashboards with Grafana](#dashboards-with-grafana)
+- [Importing an OPC UA Information Model into InfluxDB (UA Cloud Library)](#importing-an-opc-ua-information-model-into-influxdb-ua-cloud-library)
+- [Command & Control with UA Cloud Commander](#command--control-with-ua-cloud-commander)
+  - [How It Is Configured](#how-it-is-configured)
+  - [Sending a Command](#sending-a-command)
+  - [Automated Feedback Loop with UA Cloud Action](#automated-feedback-loop-with-ua-cloud-action)
 - [Security Analysis (STRIDE)](#security-analysis-stride)
   - [Trust Boundaries and Assets](#trust-boundaries-and-assets)
   - [STRIDE Threat Assessment](#stride-threat-assessment)
@@ -135,24 +142,25 @@ from industrial protocols to a time-series database:
 |-----------|-------|------|-------|
 | **ua-edgetranslator** | `ghcr.io/opcfoundation/ua-edgetranslator:main` | OPC Foundation **UA Edge Translator** — connects to southbound assets and translates protocols (LoRaWAN, OCPP, etc.) into an OPC UA information model. Exposes a web UI for configuration. | 4840 (OPC UA server), 5000/5001 (LoRaWAN), 19520/19521 (OCPP), **8080 (web UI)** |
 | **ua-cloudpublisher** | `ghcr.io/barnstee/ua-cloudpublisher:main` | **UA Cloud Publisher** — subscribes to OPC UA data (from the edge translator) and publishes it as **OPC UA PubSub** JSON messages to the MQTT broker. Exposes a web UI for configuration. | **8081 (web UI)** |
+| **ua-cloudcommander** | `ghcr.io/opcfoundation/ua-cloudcommander:main` | OPC Foundation **UA Cloud Commander** — the command & control **Responder**. Subscribes to the Mosquitto `commands/#` topic for `ua-action-request` messages, executes OPC UA operations (Read, HistoricalRead, Write, MethodCall) against on-premises OPC UA servers (e.g. the Edge Translator), and publishes `ua-action-response` messages back to the `responses` topic. Has no web UI. | — |
 | **mosquitto** | `eclipse-mosquitto:2.0.18` | **Eclipse Mosquitto** MQTT broker that carries the OPC UA PubSub `data/#` and `metadata` messages between the publisher and Telegraf. Configured via `mosquitto-conf` (TLS + authentication required with the `IOT_USERNAME` / `IOT_PASSWORD` credentials supplied at apply time, exposed to the broker via the `MOSQUITTO_USERNAME` / `MOSQUITTO_PASSWORD` env vars, TLS listener on 8883). | 8883 (MQTT/TLS) |
 | **telegraf** | `telegraf:1.37-alpine` | **Telegraf** agent that consumes the MQTT PubSub messages, parses them with the `json_v2` parser (defined in the `telegraf-conf` ConfigMap), and writes them into InfluxDB. Measurements: `opcua_pubsub` (data) and `opcua_metadata` (metadata). | — |
 | **influxdb** | `influxdb:2.7` | **InfluxDB 2.7** time-series database that stores the ingested telemetry. Initialized with org `iot`, bucket `mqtt`, and admin user set to your `IOT_USERNAME`. Exposes a web UI (Data Explorer / dashboards). | **8086 (web UI/API)** |
-| **influxdb-auth** (Secret) | — | Holds the `INFLUX_TOKEN` used by InfluxDB (admin token) and Telegraf (write token). Provided at deploy time via the `${INFLUX_TOKEN}` variable. | — |
+| **grafana** | `grafana/grafana:11.2.0` | **Grafana** — dashboarding & alerting UI with a **pre-provisioned InfluxDB data source** (Flux, org `iot`, bucket `mqtt`) and a **starter dashboard** ("OPC UA Telemetry Overview"). | **3000 (web UI)** |
+| **ua-cloudaction** | `ghcr.io/opcfoundation/ua-cloudaction:main` | OPC Foundation **UA Cloud Action** — the command & control **Requestor**. Polls a configured **InfluxDB** field and, when it crosses a threshold, publishes a `ua-action-request` (MethodCall) to the Mosquitto `commands` topic for UA Cloud Commander to execute, closing the digital feedback loop. Has a small status web UI. | **8082 (web UI)** |
+| **portainer** | `portainer/portainer-ce:2.21.4` | **Portainer CE** — web UI to manage the single-node K3s cluster (workloads, logs, shells, events). Runs with a `cluster-admin`-bound ServiceAccount so it manages the cluster in-cluster via the K3s API server. | **9443 (HTTPS UI)**, 9000 (HTTP UI), 8000 (edge tunnel) |
+| **influxdb-auth** (Secret) | — | Holds the `INFLUX_TOKEN` used by InfluxDB (admin token), Telegraf (write token), Grafana (query token), and UA Cloud Action (query token). Provided at deploy time via the `${INFLUX_TOKEN}` variable. | — |
 | **telegraf-conf** / **mosquitto-conf** (ConfigMaps) | — | Configuration for Telegraf (MQTT inputs + InfluxDB output) and Mosquitto respectively. | — |
 
 Data flow:
 
-```
-Assets → ua-edgetranslator → ua-cloudpublisher → Mosquitto (MQTT) → Telegraf → InfluxDB
-         (OPC UA / protocol  (OPC UA PubSub                         (json_v2   (time-series
-          translation)        JSON over MQTT)                        parsing)   storage + UI)
-```
+![Reference solution architecture and data flow](./arch.png)
 
 > **Security note:** you choose the credentials at deployment time via the
 > `IOT_USERNAME` / `IOT_PASSWORD` variables (see *Apply the Stack Manifest*),
 > used consistently across the Edge Translator,
-> Cloud Publisher, Mosquitto, and InfluxDB for demo purposes. Mosquitto uses a
+> Cloud Publisher, Cloud Commander, Mosquitto, and InfluxDB for demo purposes.
+> Mosquitto uses a
 > self-signed TLS certificate generated at pod startup.
 > Change these and use certificates from a trusted CA before any production or
 > exposed deployment.
@@ -246,6 +254,9 @@ paths are also mapped as `hostPath` volumes on the Pi:
 | `/influxdb2` | InfluxDB | Time-series telemetry, buckets, and InfluxDB config (the primary telemetry store). |
 | `/translator/settings`, `/translator/nodesets`, `/translator/pki`, `/translator/logs` | UA Edge Translator | Configuration, OPC UA nodesets, certificates, and logs. |
 | `/publisher/settings`, `/publisher/pki`, `/publisher/logs` | UA Cloud Publisher | Configuration, certificates, and logs. |
+| `/commander/pki`, `/commander/logs` | UA Cloud Commander | OPC UA client certificates and logs. |
+| `/portainer` | Portainer | Portainer database, users, and settings. |
+| `/grafana` | Grafana | Grafana database, users, and user-created dashboards. |
 
 > **Note:** the Mosquitto broker uses an `emptyDir` volume, so its queued
 > messages are **not** persisted across pod restarts — durable telemetry lives in
@@ -262,9 +273,42 @@ Replace `<device-ip>` with the CM5's IP address (from `ip addr` or
 | **UA Edge Translator** | `http://<device-ip>:8080` | Configure southbound asset connections and the OPC UA information model. Log in with the `IOT_USERNAME` / `IOT_PASSWORD` you set (exposed via the manifest `OPCUA_USERNAME` / `OPCUA_PASSWORD` env vars). |
 | **UA Cloud Publisher** | `http://<device-ip>:8081` | Configure which OPC UA nodes to publish and the MQTT broker target (`mosquitto.default.svc.cluster.local:8883`, TLS). Log in with the `IOT_USERNAME` / `IOT_PASSWORD` you set (exposed via the manifest `PUBLISHER_USERNAME` / `PUBLISHER_PASSWORD` env vars). |
 | **InfluxDB** | `http://<device-ip>:8086` | Time-series UI, Data Explorer, and dashboards. Log in with the `IOT_USERNAME` / `IOT_PASSWORD` you set (org `iot`, bucket `mqtt`). |
+| **Portainer** | `https://<device-ip>:9443` | Kubernetes management UI for the K3s cluster. On first access you set the admin password (see *Managing the Cluster with Portainer*). |
+| **Grafana** | `http://<device-ip>:3000` | Dashboards & alerting. Log in with the `IOT_USERNAME` / `IOT_PASSWORD` you set. The InfluxDB data source and a starter dashboard are pre-provisioned (see *Dashboards with Grafana*). |
+| **UA Cloud Action** | `http://<device-ip>:8082` | Status UI for the automated feedback loop (data-source, broker, and Commander connectivity). Log in with the `IOT_USERNAME` / `IOT_PASSWORD` you set (see *Automated Feedback Loop with UA Cloud Action*). |
 
-To keep both UIs reachable on the single node, the manifest publishes the Cloud Publisher Service on host port
+To keep both UIs reachable on the single node,
  **8081** (mapped to the container's 8080) while the Edge Translator stays on **8080**. No extra steps are needed — just browse to `:8080` and `:8081` respectively.
+
+## Managing the Cluster with Portainer
+
+**Portainer CE** provides a web UI to inspect and manage everything running on the
+single-node K3s cluster (deployments, pods, logs, container shells, events, and
+volumes). It is deployed by `iot-stack.yaml` and is pre-wired to manage the
+cluster it runs in — no manual endpoint configuration is required.
+
+How the K3s connection works:
+
+- The manifest creates a **`portainer-sa-clusteradmin`** ServiceAccount and a
+  **ClusterRoleBinding** to the built-in `cluster-admin` role, then runs the
+  Portainer pod under that ServiceAccount. Portainer therefore talks to the K3s
+  API server **in-cluster** using the mounted ServiceAccount token — it manages
+  the local Kubernetes environment out of the box.
+- Portainer data (users, settings) is persisted on the Pi at `/portainer`.
+
+First-time setup:
+
+1. Browse to `https://<device-ip>:9443` (accept the self-signed certificate
+   warning) within a few minutes of the pod starting.
+   > For security, Portainer disables initial admin creation if you don't complete
+   > it shortly after startup. If you see a timeout message, restart the pod:
+   > `kubectl rollout restart deployment/portainer`.
+2. Create the **admin** user and password.
+3. On the environments page, select the **local Kubernetes** environment (already
+   connected via the in-cluster ServiceAccount) and click **Live connect**.
+4. You can now browse the `default` namespace to see the Edge Translator, Cloud
+   Publisher, Cloud Commander, Mosquitto, Telegraf, and InfluxDB workloads, view
+   their logs, exec into containers, and monitor cluster resources.
 
 ## Onboarding Devices
 
@@ -330,7 +374,7 @@ measurement:
 > by Telegraf's `metadata` input → `opcua_metadata`), both landing in the
 > InfluxDB `mqtt` bucket.
 
-### Onboarding an OPC UA Device (via UA Cloud Publisher)
+## Onboarding an OPC UA Device (via UA Cloud Publisher)
 
 Use this path when the device already speaks OPC UA (including data that the Edge
 Translator has already exposed).
@@ -351,7 +395,7 @@ Translator has already exposed).
    describing each dataset to the `metadata` topic. Confirm data is flowing by checking the InfluxDB `mqtt` bucket (see
    [Querying Data in the InfluxDB Dashboard](#querying-data-in-the-influxdb-dashboard)).
 
-### Onboarding a Non-OPC UA Device (map it in UA Edge Translator first)
+## Onboarding a Non-OPC UA Device (map it in UA Edge Translator first)
 
 The UA Edge Translator uses **W3C Web of Things (WoT) Thing Descriptions (TDs)**
 to model a non-OPC UA asset (e.g. Modbus TCP, LoRaWAN, OCPP, or an HTTP/REST
@@ -442,6 +486,217 @@ The device is now running the full OPC Foundation Cloud Initiative reference
 software stack, from protocol translation at the edge through to a queryable
 time-series dashboard.
 
+## Dashboards with Grafana
+
+**Grafana** is deployed by `iot-stack.yaml` as an alternative to InfluxDB's
+built-in dashboards, with richer visualization, templating, and alerting. It comes
+**pre-provisioned** so no manual setup is needed beyond logging in.
+
+What the manifest provisions automatically:
+
+- **InfluxDB data source** (`grafana-datasources` ConfigMap) — points at
+  `http://influxdb.default.svc.cluster.local:8086` using the **Flux** query
+  language, org `iot`, and default bucket `mqtt`. The query token is injected from
+  the `influxdb-auth` Secret via the `INFLUX_TOKEN` environment variable
+  (interpolated into the provisioned data source at startup).
+- **Dashboard provider** (`grafana-dashboard-provider` ConfigMap) — loads any
+  dashboards found under `/var/lib/grafana/dashboards`.
+- **Starter dashboard** (`grafana-dashboards` ConfigMap) — *OPC UA Telemetry
+  Overview* (uid `opcua-overview`) with a time-series panel of `opcua_pubsub`
+  values, an ingest-rate stat, an active-dataset-writers stat, and a `publisher`
+  template variable for filtering.
+
+Usage:
+
+1. Browse to `http://<device-ip>:3000` and log in with your `IOT_USERNAME` /
+   `IOT_PASSWORD` (Grafana admin credentials set via `GF_SECURITY_ADMIN_USER` /
+   `GF_SECURITY_ADMIN_PASSWORD`).
+2. Open **Dashboards → OPC UA Telemetry Overview** to see live data flowing from
+   the `mqtt` bucket.
+3. Use the **InfluxDB** data source in **Explore** or when adding new panels; write
+   Flux queries exactly as in the [InfluxDB dashboard section](#querying-data-in-the-influxdb-dashboard).
+4. Grafana settings and any dashboards you create are persisted on the Pi at
+   `/grafana`. (The provisioned data source and starter dashboard are managed by
+   the ConfigMaps and re-applied on restart.)
+
+> **Note:** the starter dashboard's numeric time-series panel assumes numeric
+> fields (e.g. `Payload_<NodeName>_Value`). Adjust the panel's Flux filter to
+> match the exact `_field` names your assets publish.
+
+## Importing an OPC UA Information Model into InfluxDB (UA Cloud Library)
+
+You can pre-load the **full set of variables** an OPC UA server *could* expose —
+not just the ones currently being published — by importing its **Information
+Model** from the OPC Foundation [UA Cloud Library](https://uacloudlibrary.opcfoundation.org)
+into InfluxDB. This mirrors the [Manufacturing Ontologies](https://github.com/digitaltwinconsortium/ManufacturingOntologies/blob/main/cloudlib.md)
+approach (which imports into Azure Data Explorer), adapted to InfluxDB.
+
+Each model variable is written as a placeholder point (field `status="[Future]"`)
+into a dedicated **`opcua_model`** measurement in the `mqtt` bucket, so you can see
+every *potential* node alongside the live `opcua_pubsub` values.
+
+> A separate measurement is used (rather than mixing into `opcua_pubsub`) because
+> InfluxDB fields are single-typed — the model's placeholder is a string, while
+> live telemetry values are numeric.
+
+The importer is provided as an on-demand Kubernetes Job in
+[`import-opcua-model.yaml`](./import-opcua-model.yaml). It uses a small
+standard-library Python script that downloads the model's NodeSet2 XML from the
+Cloud Library REST API, extracts every `UAVariable`, and writes them to InfluxDB
+using the token from the existing `influxdb-auth` Secret.
+
+Steps:
+
+1. **Register** (free) at the UA Cloud Library and note the **model id** of the
+   model you want (visible in its Explorer URL — e.g. the `Station` nodeset is
+   `1627266626`).
+2. **Run the import Job**, supplying your Cloud Library credentials and the model
+   id (substituted at apply time):
+
+   ```bash
+   export UACLOUDLIB_USERNAME="myUser"
+   export UACLOUDLIB_PASSWORD="myPass"
+   export UACLOUDLIB_MODEL_ID="1627266626"
+   kubectl delete job import-opcua-model --ignore-not-found
+   envsubst < import-opcua-model.yaml | kubectl apply -f -
+   kubectl logs -f job/import-opcua-model
+   ```
+
+   The log prints how many variables were imported.
+3. **Query the imported model** in the InfluxDB Data Explorer or Grafana:
+
+   ```flux
+   from(bucket: "mqtt")
+     |> range(start: -1h)
+     |> filter(fn: (r) => r._measurement == "opcua_model")
+     |> filter(fn: (r) => r._field == "displayName")
+     |> keep(columns: ["_value", "nodeId", "dataType", "namespaceUri", "model"])
+   ```
+
+> The Cloud Library endpoint (`uacloudlibrary.opcfoundation.org`) must be
+> reachable from the cluster for the import Job to run. The Job auto-cleans up one
+> hour after completion (`ttlSecondsAfterFinished`).
+
+## Command & Control with UA Cloud Commander
+
+While the Publisher → Telegraf → InfluxDB path handles **read-only telemetry**,
+**UA Cloud Commander** adds a **command & control** path so a cloud (or local)
+application can remotely **read, write, call methods on, and historically read**
+OPC UA nodes on the edge — all over the same Mosquitto broker.
+
+Cloud Commander implements the OPC UA PubSub **Actions** request/response pattern
+(OPC 10000-14). It acts as the **Responder**: it subscribes to the `commands/#`
+topic, executes the requested OPC UA operation against an on-premises OPC UA
+server (e.g. the Edge Translator at `opc.tcp://<device-ip>:4840`), and publishes
+the result to the `responses` topic.
+
+### How It Is Configured
+
+`ua-cloudcommander` is deployed by `iot-stack.yaml` and connects to Mosquitto via
+these environment variables (no web UI — it is configured entirely through env):
+
+| Variable | Value | Purpose |
+|----------|-------|---------|
+| `BROKERNAME` | `mosquitto.default.svc.cluster.local` | In-cluster Mosquitto Service. |
+| `BROKERPORT` | `8883` | TLS MQTT port. |
+| `USE_TLS` | `true` | Mosquitto requires TLS. |
+| `CLIENTNAME` | `UACloudCommander` | MQTT client id / Responder `PublisherId`. |
+| `TOPIC` | `commands/#` | Topic it subscribes to for `ua-action-request` messages. |
+| `RESPONSE_TOPIC` | `responses` | Default topic for `ua-action-response` messages (used when a request omits `ResponseAddress`). |
+| `USERNAME` / `PASSWORD` | `${IOT_USERNAME}` / `${IOT_PASSWORD}` | Broker credentials (same as the rest of the stack). |
+| `UA_USERNAME` / `UA_PASSWORD` | `${IOT_USERNAME}` / `${IOT_PASSWORD}` | Credentials used to sign in to the target OPC UA servers. |
+
+The OPC UA client certificate and logs are persisted on the Pi under
+`/commander/pki` and `/commander/logs`.
+
+> **Self-signed TLS:** Mosquitto uses a self-signed certificate generated at pod
+> startup. If Cloud Commander rejects the TLS handshake, mount/trust the broker's
+> CA certificate in the Commander container (or use a trusted-CA certificate for
+> Mosquitto) as recommended in the security note above.
+
+### Sending a Command
+
+Publish a `ua-action-request` NetworkMessage to the `commands` topic and listen
+on `responses` for the reply. For example, to **read** a node (from a machine that
+can reach the broker, using the stack credentials over TLS):
+
+```bash
+# Subscribe for responses in one terminal
+mosquitto_sub -h <device-ip> -p 8883 --cafile ca.crt \
+  -u "$IOT_USERNAME" -P "$IOT_PASSWORD" -t responses
+
+# Publish a Read request in another terminal
+mosquitto_pub -h <device-ip> -p 8883 --cafile ca.crt \
+  -u "$IOT_USERNAME" -P "$IOT_PASSWORD" -t commands -m '{
+    "MessageId": "32235f26-4a3a-4a56-9f1f-2b6f8a2f0a11",
+    "MessageType": "ua-action-request",
+    "PublisherId": "MyCloudApp",
+    "Timestamp": "2022-11-28T12:01:00.0923534Z",
+    "RequestorId": "MyCloudApp",
+    "TimeoutHint": 15000,
+    "Messages": [
+      {
+        "DataSetWriterId": 1,
+        "ActionTargetId": 1,
+        "RequestId": 1,
+        "ActionState": 1,
+        "Payload": {
+          "Endpoint": "opc.tcp://<device-ip>:4840",
+          "NodeId": "http://opcfoundation.org/UA/Station/;i=123"
+        }
+      }
+    ]
+  }'
+```
+
+The `ActionTargetId` selects the operation: **1 = Read**, **2 = HistoricalRead**,
+**3 = Write**, **4 = MethodCall**. Cloud Commander replies on `responses` with a
+`ua-action-response` message echoing `RequestorId` / `RequestId` and containing
+the `Result` (or an `Error`). See the
+[UA Cloud Commander documentation](https://github.com/OPCFoundation/UA-CloudCommander)
+for the full payload schema of each operation.
+
+### Automated Feedback Loop with UA Cloud Action
+
+**UA Cloud Action** is the automated **Requestor** counterpart to Cloud Commander.
+Instead of a human publishing a command, it **polls telemetry and reacts**: on a
+15-second loop it queries a configured value and, when it crosses a threshold,
+publishes a `ua-action-request` (a `MethodCall`) to the `commands` topic — which
+Cloud Commander executes on the target OPC UA server. This closes an edge-local
+**digital feedback loop** entirely on the Pi.
+
+In this reference stack it is deployed (`iot-stack.yaml`) to read from **InfluxDB**
+and drive Commander over Mosquitto:
+
+| Variable | Value | Purpose |
+|----------|-------|---------|
+| `DATA_SOURCE` | `InfluxDB` | Use InfluxDB as the trigger source (instead of Azure Data Explorer). |
+| `INFLUX_URL` | `http://influxdb.default.svc.cluster.local:8086` | InfluxDB endpoint. |
+| `INFLUX_ORG` / `INFLUX_BUCKET` | `iot` / `mqtt` | Org and bucket to query. |
+| `INFLUX_MEASUREMENT` | `opcua_pubsub` | Measurement to query. |
+| `INFLUX_FIELD` | `Payload_Pressure_Value` | **Numeric field to evaluate — change to match your assets.** |
+| `INFLUX_THRESHOLD` | `4000` | Trigger when the latest value exceeds this. |
+| `INFLUX_RANGE` | `-1m` | Look-back window for the latest value. |
+| `INFLUX_TOKEN` | *(from `influxdb-auth`)* | Query token. |
+| `MESSAGING_PLATFORM` | `MQTT` | Reach Commander over MQTT (not Kafka). |
+| `MQTT_TARGET` | `UACloudCommander` | Send the full OPC UA PubSub ActionRequest envelope. |
+| `BROKER_NAME` / `MQTT_PORT` | `mosquitto…` / `8883` | Mosquitto broker (TLS). |
+| `MQTT_USE_TLS` / `MQTT_TLS_INSECURE` | `true` / `true` | TLS with the self-signed broker cert (verification skipped, like Telegraf). |
+| `BROKER_USERNAME` / `BROKER_PASSWORD` | `${IOT_USERNAME}` / `${IOT_PASSWORD}` | Broker credentials. |
+| `TOPIC` / `RESPONSE_TOPIC` | `commands` / `responses` | The topics Cloud Commander subscribes/replies on. |
+| `UA_SERVER_ENDPOINT`, `UA_SERVER_METHOD_ID`, `UA_SERVER_OBJECT_ID`, … | *(placeholders)* | The OPC UA method Cloud Commander invokes on trigger — set these to a real method on your target server (e.g. the Edge Translator). |
+
+> **InfluxDB data source:** support for querying InfluxDB was added to UA Cloud
+> Action for this stack (the upstream app queries Azure Data Explorer). The
+> `DATA_SOURCE=InfluxDB` branch runs a Flux query for the latest `INFLUX_FIELD`
+> value and compares it to `INFLUX_THRESHOLD`. Set `INFLUX_FIELD` to a numeric
+> field your assets actually publish (discover exact names in the InfluxDB Data
+> Explorer or Grafana), otherwise no trigger will fire.
+
+A small status UI is available at `http://<device-ip>:8082` (log in with your
+`IOT_USERNAME` / `IOT_PASSWORD`), showing connectivity to the data source, the
+broker, and Cloud Commander.
+
 ## Security Analysis (STRIDE)
 
 This section applies the **STRIDE** threat-modeling framework
@@ -465,25 +720,31 @@ and what to change before an internet-exposed or production deployment.
       |  Boundary A: device <-> edge                                   | (OPC UA server :4840)
       v                                                                v
 [UA Cloud Publisher] --(MQTT/TLS :8883, user/pass)--> [Mosquitto] --(MQTT/TLS)--> [Telegraf] --(HTTP + token)--> [InfluxDB]
-      ^                                                     ^                                                        ^
-      |  Boundary B: operator <-> web UIs (:8080/:8081/:8086, basic auth)                                           |
-      +------------------------------ Boundary C: node/cluster host (K3s, hostPath volumes) --------------------------+
+      ^                                                  ^   ^                                                        ^   ^
+      |                            [UA Cloud Commander] -+   |  (commands/responses)                                  |   |
+      |                            [UA Cloud Action] --------+--(reads InfluxDB threshold, publishes commands)--------+   |
+      |                                                                                                    [Grafana] -----+ (query token)
+      |                                                                                          [Model importer Job] ----+ (writes opcua_model)
+      |  Boundary B: operator <-> web UIs (:8080/:8081/:8082/:8086/:3000/:9443, basic auth)                                |
+      +----------- Boundary C: node/cluster host (K3s + Portainer cluster-admin, hostPath volumes) -----------------------+
 ```
 
 Key assets: the telemetry data (in transit and at rest in InfluxDB), the shared
-`IOT_USERNAME` / `IOT_PASSWORD` credentials, the `INFLUX_TOKEN`, the broker's
-private key, and the K3s node itself (root of trust for all `hostPath` data).
+`IOT_USERNAME` / `IOT_PASSWORD` credentials, the `INFLUX_TOKEN`, the UA Cloud
+Library credentials used by the import Job, the broker's private key, the
+Portainer `cluster-admin` ServiceAccount token (full control of the cluster), and
+the K3s node itself (root of trust for all `hostPath` data).
 
 ### STRIDE Threat Assessment
 
 | STRIDE category | Representative threats in this stack | Mitigations already in place | Residual risk / gaps |
 |-----------------|--------------------------------------|------------------------------|----------------------|
-| **Spoofing** (identity) | A rogue client impersonates the Publisher to the broker; an attacker impersonates a web UI user; a fake OPC UA server feeds the Publisher. | MQTT broker requires username/password (`allow_anonymous false`); all three web UIs require basic auth; OPC UA supports certificate exchange between Publisher and server. | Single shared credential set across all components; no per-service identities or mutual TLS (mTLS); broker does not authenticate clients by certificate. |
-| **Tampering** (integrity) | Modification of telemetry in transit; tampering with `hostPath` config/cert files on the node; editing the ConfigMaps. | MQTT is carried over TLS (8883); config is delivered via Kubernetes ConfigMaps/Secrets. | Telegraf uses `insecure_skip_verify = true`, so a man-in-the-middle with any cert is accepted; `hostPath` volumes (`/influxdb2`, `/translator/*`, `/publisher/*`) are writable by anyone with node access; no message signing/integrity checks on payloads. |
-| **Repudiation** (auditability) | An operator changes a device mapping or publish set and denies it; no record of who logged in. | Component logs are written to `hostPath` `logs` directories and pod stdout. | No centralized, tamper-evident audit log; shared credentials make actions unattributable to an individual; no log shipping or retention policy. |
-| **Information disclosure** (confidentiality) | Sniffing telemetry; reading credentials from the manifest; exposed dashboards. | MQTT is encrypted with TLS; `INFLUX_TOKEN` is stored in a Kubernetes `Secret`; credentials are supplied at apply time (not committed to git). | Credentials are injected as plain-text env vars (visible via `kubectl describe`/`exec`); Kubernetes Secrets are base64, not encrypted at rest by default; self-signed broker cert offers encryption but no server-identity assurance; all UIs are exposed on the node IP with no network policy. |
-| **Denial of service** (availability) | Flooding the broker or web UIs; filling the node disk with telemetry; a crash loop. | Liveness/readiness probes restart unhealthy pods; single-replica deployments recover automatically. | No rate limiting, quotas, or `resources` requests/limits on any pod; unbounded InfluxDB growth on the local SSD; a single node is a single point of failure; broker uses `emptyDir` (queued messages lost on restart). |
-| **Elevation of privilege** (authorization) | Container escape to the node; a compromised pod reading another component's data via shared host paths; using the InfluxDB admin token for full DB control. | Distinct container images per component; `nodeSelector` pins workloads to Linux. | Containers run with default (often root) user and no `securityContext`; no `NetworkPolicy` isolation between pods; the InfluxDB token is an all-powerful admin token; no RBAC scoping for the workloads. |
+| **Spoofing** (identity) | A rogue client impersonates the Publisher or **UA Cloud Commander/Action** to the broker; an attacker impersonates a web UI user (Translator, Publisher, Grafana, UA Cloud Action, or Portainer); a fake OPC UA server feeds the Publisher; a forged `ua-action-request` triggers an OPC UA method. | MQTT broker requires username/password (`allow_anonymous false`); all web UIs (`:8080/:8081/:8082/:3000/:9443`) require login; OPC UA supports certificate exchange between Publisher/Commander and server. | Single shared credential set across all components (including Grafana/Portainer admin); no per-service identities or mutual TLS (mTLS); broker does not authenticate clients by certificate; any client that can publish to `commands` can drive Commander. |
+| **Tampering** (integrity) | Modification of telemetry in transit; tampering with `hostPath` config/cert files on the node; editing the ConfigMaps; **altering the imported `opcua_model` data** or the model importer script; a malicious command writing/actuating an OPC UA node via Commander. | MQTT is carried over TLS (8883); config is delivered via Kubernetes ConfigMaps/Secrets; Commander/Action send spec-compliant OPC UA PubSub Action envelopes. | Telegraf and UA Cloud Action use TLS verification skip (`insecure_skip_verify` / `MQTT_TLS_INSECURE=true`), so a man-in-the-middle with any cert is accepted; `hostPath` volumes (`/influxdb2`, `/translator/*`, `/publisher/*`, `/commander/*`, `/portainer`, `/grafana`) are writable by anyone with node access; no message signing on payloads; Commander performs Writes/MethodCalls with no per-action authorization. |
+| **Repudiation** (auditability) | An operator changes a device mapping, publish set, Grafana dashboard, or issues a command and denies it; no record of who logged in or who imported a model. | Component logs are written to `hostPath` `logs` directories and pod stdout; Portainer records some cluster events. | No centralized, tamper-evident audit log; shared credentials make actions unattributable to an individual; command/action requests and model imports are not attributably logged; no log shipping or retention policy. |
+| **Information disclosure** (confidentiality) | Sniffing telemetry; reading credentials from the manifest; exposed dashboards (Grafana, Portainer, UA Cloud Action) on the node IP; leaking the **UA Cloud Library credentials** used by the import Job. | MQTT is encrypted with TLS; `INFLUX_TOKEN` is stored in a Kubernetes `Secret`; credentials are supplied at apply time (not committed to git). | Credentials (including UA Cloud Library and Grafana/Portainer admin) are injected as plain-text env vars (visible via `kubectl describe`/`exec`); Kubernetes Secrets are base64, not encrypted at rest by default; self-signed broker cert offers encryption but no server-identity assurance; all UIs are exposed on the node IP with no network policy. |
+| **Denial of service** (availability) | Flooding the broker or web UIs; filling the node disk with telemetry or repeated model imports; a crash loop; a runaway feedback loop from UA Cloud Action. | Liveness/readiness probes restart unhealthy pods; single-replica deployments recover automatically; the importer is a short-lived Job with `ttlSecondsAfterFinished`. | No rate limiting, quotas, or `resources` requests/limits on any pod; unbounded InfluxDB growth on the local SSD (now including `opcua_model` points); a single node is a single point of failure; broker uses `emptyDir` (queued messages lost on restart); UA Cloud Action polls and can actuate every 15 s with no throttle. |
+| **Elevation of privilege** (authorization) | Container escape to the node; a compromised pod reading another component's data via shared host paths; using the InfluxDB admin token for full DB control; **abusing Portainer's `cluster-admin` ServiceAccount to take over the whole cluster**; using Commander/Action to reach and control OT devices. | Distinct container images per component; `nodeSelector` pins workloads to Linux; the importer Job uses `restartPolicy: Never`. | Containers run with default (often root) user and no `securityContext`; no `NetworkPolicy` isolation between pods; the InfluxDB token is an all-powerful admin token; **Portainer is bound to `cluster-admin`, so compromising it compromises the cluster**; Commander bridges IT→OT with method-call/write capability and no fine-grained authorization; no RBAC scoping for the workloads. |
 
 ### Production Hardening Recommendations
 
@@ -527,5 +788,16 @@ deployment. Prioritize the items marked **(High)**.
    growth, back up `/influxdb2` regularly, and consider multi-node/HA for the
    broker and database to remove the single-point-of-failure.
 10. **Keep software patched.** Pin and regularly update the container image
-    versions, apply OS/K3s security updates, and scan images for known
-    vulnerabilities as part of your release process.
+     versions, apply OS/K3s security updates, and scan images for known
+     vulnerabilities as part of your release process.
+11. **Scope Portainer's cluster access (High).** The demo binds Portainer to the
+    built-in `cluster-admin` role. For production, grant it a least-privilege
+    `Role`/`ClusterRole` limited to the namespaces and resources operators
+    actually manage, protect its UI behind the ingress, and enforce strong,
+    per-user Portainer accounts (not the shared credentials).
+12. **Authorize and throttle the command/control path.** Restrict who can publish
+    to the `commands` topic (broker ACLs), validate/allow-list the OPC UA methods
+    and nodes UA Cloud Commander may Write/Call, and rate-limit UA Cloud Action's
+    actuation so a faulty threshold or spoofed value cannot drive OT devices
+    uncontrollably. Treat the UA Cloud Library import credentials as secrets and
+    restrict the import Job's egress.

@@ -1,0 +1,175 @@
+# On-demand importer that loads an OPC UA Information Model from the OPC Foundation
+# UA Cloud Library (https://uacloudlibrary.opcfoundation.org) into InfluxDB.
+#
+# It downloads the model's NodeSet2 XML via the Cloud Library REST API, extracts
+# every UAVariable, and writes one placeholder point per variable into the
+# `opcua_model` measurement of the `mqtt` bucket. This lets users see ALL the
+# variables that *could* be published by that model, alongside the ones actually
+# being published live in `opcua_pubsub`.
+#
+# Apply on demand (the model id and Cloud Library credentials are substituted at
+# apply time), for example:
+#
+#   export UACLOUDLIB_USERNAME="myUser"
+#   export UACLOUDLIB_PASSWORD="myPass"
+#   export UACLOUDLIB_MODEL_ID="1627266626"   # e.g. the Station nodeset
+#   kubectl delete job import-opcua-model --ignore-not-found
+#   envsubst < import-opcua-model.yaml | kubectl apply -f -
+#   kubectl logs -f job/import-opcua-model
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: opcua-model-importer
+data:
+  import_model.py: |
+    #!/usr/bin/env python3
+    # Downloads an OPC UA Information Model from the UA Cloud Library and writes a
+    # placeholder point per variable into InfluxDB. Uses only the Python standard
+    # library so no pip install is required on the edge device.
+    import base64
+    import json
+    import os
+    import sys
+    import time
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+    import xml.etree.ElementTree as ET
+
+    model_id = os.environ["UACLOUDLIB_MODEL_ID"]
+    lib_url = os.environ.get("UACLOUDLIB_URL", "https://uacloudlibrary.opcfoundation.org").rstrip("/")
+    user = os.environ.get("UACLOUDLIB_USERNAME", "")
+    password = os.environ.get("UACLOUDLIB_PASSWORD", "")
+
+    influx_url = os.environ.get("INFLUX_URL", "http://influxdb.default.svc.cluster.local:8086").rstrip("/")
+    org = os.environ.get("INFLUX_ORG", "iot")
+    bucket = os.environ.get("INFLUX_BUCKET", "mqtt")
+    token = os.environ["INFLUX_TOKEN"]
+    measurement = os.environ.get("MODEL_MEASUREMENT", "opcua_model")
+
+    # --- download the model from the UA Cloud Library REST API ---
+    download_url = f"{lib_url}/infomodel/download/{model_id}"
+    req = urllib.request.Request(download_url, headers={"accept": "application/json"})
+    if user:
+        basic = base64.b64encode(f"{user}:{password}".encode()).decode()
+        req.add_header("Authorization", f"Basic {basic}")
+
+    print(f"Downloading model {model_id} from {download_url} ...")
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        body = json.load(resp)
+
+    title = body.get("title", "") or str(model_id)
+    nodeset_xml = body["nodeset"]["nodesetXml"]
+    root = ET.fromstring(nodeset_xml)
+
+    # NodeSet2 uses a default namespace; derive it from the root element.
+    ns_uri = root.tag.split("}")[0].strip("{") if "}" in root.tag else ""
+
+    def q(tag):
+        return f"{{{ns_uri}}}{tag}" if ns_uri else tag
+
+    model_namespace = "unknown"
+    namespaces_el = root.find(q("NamespaceUris"))
+    if namespaces_el is not None:
+        uri_el = namespaces_el.find(q("Uri"))
+        if uri_el is not None and uri_el.text:
+            model_namespace = uri_el.text
+
+    def esc_tag(value):
+        return (value or "unknown").replace("\\", "\\\\").replace(" ", "\\ ").replace(",", "\\,").replace("=", "\\=")
+
+    def esc_field(value):
+        return (value or "").replace("\\", "\\\\").replace('"', '\\"')
+
+    now_ns = int(time.time() * 1_000_000_000)
+    lines = []
+    for variable in root.findall(q("UAVariable")):
+        node_id = variable.get("NodeId", "")
+        browse_name = variable.get("BrowseName", "")
+        data_type = variable.get("DataType", "")
+        display_el = variable.find(q("DisplayName"))
+        display_name = display_el.text if (display_el is not None and display_el.text) else browse_name
+        if not display_name:
+            continue
+        tags = (
+            f"{measurement}"
+            f",model={esc_tag(title)}"
+            f",namespaceUri={esc_tag(model_namespace)}"
+            f",nodeId={esc_tag(node_id)}"
+            f",dataType={esc_tag(data_type)}"
+        )
+        fields = (
+            f'displayName="{esc_field(display_name)}"'
+            f',browseName="{esc_field(browse_name)}"'
+            f',status="[Future]"'
+        )
+        lines.append(f"{tags} {fields} {now_ns}")
+
+    if not lines:
+        print("No UAVariable nodes found in the model; nothing to import.")
+        sys.exit(0)
+
+    # --- write the placeholder points to InfluxDB via the line-protocol API ---
+    write_url = f"{influx_url}/api/v2/write?org={urllib.parse.quote(org)}&bucket={urllib.parse.quote(bucket)}&precision=ns"
+    data = "\n".join(lines).encode("utf-8")
+    write_req = urllib.request.Request(write_url, data=data, method="POST")
+    write_req.add_header("Authorization", f"Token {token}")
+    write_req.add_header("Content-Type", "text/plain; charset=utf-8")
+
+    try:
+        with urllib.request.urlopen(write_req, timeout=60) as _:
+            print(f"Imported {len(lines)} variables from model '{title}' ({model_id}) into {bucket}/{measurement}.")
+    except urllib.error.HTTPError as exc:
+        print(f"InfluxDB write failed: {exc.code} {exc.read().decode(errors='replace')}")
+        sys.exit(1)
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: import-opcua-model
+spec:
+  backoffLimit: 2
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app: import-opcua-model
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        "kubernetes.io/os": linux
+      containers:
+        - name: importer
+          image: python:3.12-slim
+          imagePullPolicy: IfNotPresent
+          command: ["python3", "/app/import_model.py"]
+          env:
+            # UA Cloud Library model id and credentials (substituted at apply time)
+            - name: UACLOUDLIB_MODEL_ID
+              value: "${UACLOUDLIB_MODEL_ID}"
+            - name: UACLOUDLIB_USERNAME
+              value: "${UACLOUDLIB_USERNAME}"
+            - name: UACLOUDLIB_PASSWORD
+              value: "${UACLOUDLIB_PASSWORD}"
+            # InfluxDB target (token reused from the existing influxdb-auth Secret)
+            - name: INFLUX_URL
+              value: "http://influxdb.default.svc.cluster.local:8086"
+            - name: INFLUX_ORG
+              value: "iot"
+            - name: INFLUX_BUCKET
+              value: "mqtt"
+            - name: MODEL_MEASUREMENT
+              value: "opcua_model"
+            - name: INFLUX_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: influxdb-auth
+                  key: INFLUX_TOKEN
+          volumeMounts:
+            - name: importer
+              mountPath: /app
+      volumes:
+        - name: importer
+          configMap:
+            name: opcua-model-importer
