@@ -1,4 +1,4 @@
-# Cloud-Initiative-Reference-Solution
+# Cloud Initiative Reference Solution
 
 OPC Foundation Cloud Initiative Open-Source Reference Solution
 
