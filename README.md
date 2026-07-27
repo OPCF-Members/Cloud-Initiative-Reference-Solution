@@ -710,12 +710,10 @@ lets you build **custom applications** — dashboards, mobile apps, analytics jo
 or backend integrations — that talk to the edge's OPC UA servers over plain
 HTTP/JSON, without embedding a native OPC UA stack.
 
-> **Implemented services:** this reference deployment currently implements only
-> the **`Read`** and **`HistoryRead`** (historical read) services of the OPC UA
-> Web API. Other services (`Write`, `Browse`, `Call`, etc.) are **not yet
-> implemented** — requests to them are not available. Use UA Cloud Commander (the
-> MQTT command path) for `Write`/`Call`/`HistoricalRead` operations in the
-> meantime.
+> **Implemented services:** this reference deployment currently implements the
+> **`Read`**, **`HistoryRead`** (historical read), and **`Browse`** services of
+> the OPC UA Web API. Other services (`Write`, `Call`, etc.) are **not implemented** due to security considerations — requests to them are not available. Use UA Cloud Commander (the
+> MQTT command path) for `Write`/`Call` operations in the meantime.
 
 > **Note:** the Web API is being implemented in UA Cloud Action. The endpoints and
 > auth described below track the OPC UA Web API specification; confirm the exact
@@ -774,9 +772,9 @@ Typical workflow to build your own app:
    `IOT_USERNAME` / `IOT_PASSWORD`.
 3. **Use the pre-built stubs** to invoke OPC UA services with typed
    requests/responses instead of hand-crafting JSON. In this deployment the
-   available operations are **`Read`** and **`HistoryRead`** (reading current and
-   historical variable values); `Write`, `Browse`, and `Call` are not yet exposed
-   by the Web API.
+   available operations are **`Read`**, **`HistoryRead`**, and **`Browse`**
+   (reading current and historical variable values and browsing the address
+   space); `Write` and `Call` are not yet exposed by the Web API.
 4. **(Optional) Generate model-specific classes.** For DataTypes from a custom
    information model, convert its NodeSet to an OpenAPI schema with the
    [Opc.Ua.ModelCompiler](https://github.com/OPCFoundation/UA-ModelCompiler), then
