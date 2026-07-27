@@ -485,10 +485,6 @@ join(tables: {d: data, m: meta}, on: ["datasetWriterId"], method: "inner")
 > Flux and save the cell to a dashboard. Set the cell's refresh interval and time
 > range at the top of the dashboard for live monitoring.
 
-The device is now running the full OPC Foundation Cloud Initiative reference
-software stack, from protocol translation at the edge through to a queryable
-time-series dashboard.
-
 ## Dashboards with Grafana
 
 **Grafana** is deployed by `iot-stack.yaml` as an alternative to InfluxDB's
@@ -531,8 +527,7 @@ Usage:
 You can pre-load the **full set of variables** an OPC UA server *could* expose —
 not just the ones currently being published — by importing its **Information
 Model** from the OPC Foundation [UA Cloud Library](https://uacloudlibrary.opcfoundation.org)
-into InfluxDB. This mirrors the [Manufacturing Ontologies](https://github.com/digitaltwinconsortium/ManufacturingOntologies/blob/main/cloudlib.md)
-approach (which imports into Azure Data Explorer), adapted to InfluxDB.
+into InfluxDB.
 
 Each model variable is written as a placeholder point (field `status="[Future]"`)
 into a dedicated **`opcua_model`** measurement in the `mqtt` bucket, so you can see
@@ -710,7 +705,7 @@ lets you build **custom applications** — dashboards, mobile apps, analytics jo
 or backend integrations — that talk to the edge's OPC UA servers over plain
 HTTP/JSON, without embedding a native OPC UA stack.
 
-> **Implemented services:** this reference deployment currently implements the
+> **Implemented services:** this reference deployment implements the
 > **`Read`**, **`HistoryRead`** (historical read), and **`Browse`** services of
 > the OPC UA Web API. Other services (`Write`, `Call`, etc.) are **not implemented** due to security considerations — requests to them are not available. Use UA Cloud Commander (the
 > MQTT command path) for `Write`/`Call` operations in the meantime.
