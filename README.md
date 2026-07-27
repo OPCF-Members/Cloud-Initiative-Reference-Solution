@@ -705,11 +705,17 @@ broker, and Cloud Commander.
 In addition to the MQTT-based feedback loop, **UA Cloud Action** exposes an
 **OPC UA Web API** — a RESTful, [OpenAPI](https://swagger.io/specification/)-based
 HTTP interface to the standard OPC UA services defined in
-[OPC UA Part 4](https://reference.opcfoundation.org/Core/Part4/v105/docs/)
-(`Read`, `Write`, `Browse`, `Call`, `HistoryRead`, etc.). This lets you build
-**custom applications** — dashboards, mobile apps, analytics jobs, or backend
-integrations — that talk to the edge's OPC UA servers over plain HTTP/JSON,
-without embedding a native OPC UA stack.
+[OPC UA Part 4](https://reference.opcfoundation.org/Core/Part4/v105/docs/). This
+lets you build **custom applications** — dashboards, mobile apps, analytics jobs,
+or backend integrations — that talk to the edge's OPC UA servers over plain
+HTTP/JSON, without embedding a native OPC UA stack.
+
+> **Implemented services:** this reference deployment currently implements only
+> the **`Read`** and **`HistoryRead`** (historical read) services of the OPC UA
+> Web API. Other services (`Write`, `Browse`, `Call`, etc.) are **not yet
+> implemented** — requests to them are not available. Use UA Cloud Commander (the
+> MQTT command path) for `Write`/`Call`/`HistoricalRead` operations in the
+> meantime.
 
 > **Note:** the Web API is being implemented in UA Cloud Action. The endpoints and
 > auth described below track the OPC UA Web API specification; confirm the exact
@@ -727,9 +733,14 @@ http://<device-ip>:8082
 - The **OpenAPI/Swagger** definition (e.g. `http://<device-ip>:8082/swagger`)
   describes every available route and schema — point your tooling at it to explore
   or generate clients.
-- Requests authenticate with the same `IOT_USERNAME` / `IOT_PASSWORD` (or a
-  bearer/JWT token, per the OPC UA Web API spec — the reference gateway uses OAuth2
-  JWTs passed in the HTTP `Authorization` header).
+- **Authentication is mandatory.** The UA Cloud Action web UI and Web API require
+  **HTTP Basic authentication** on every request — there is no anonymous access.
+  Supply the `IOT_USERNAME` / `IOT_PASSWORD` credentials (set via the manifest's
+  `ADMIN_USERNAME` / `ADMIN_PASSWORD`) in the HTTP `Authorization: Basic <base64>`
+  header. Requests without valid credentials are rejected.
+  > The OPC UA Web API specification also allows bearer/JWT tokens in the
+  > `Authorization` header (the reference gateway uses OAuth2 JWTs); Basic auth is
+  > what this reference deployment mandates.
 - Behind the OPC UA Web API, UA Cloud Action forwards the requested service to the
   target OPC UA server (e.g. the Edge Translator at
   `opc.tcp://ua-edgetranslator.default.svc.cluster.local:4840`).
@@ -758,11 +769,14 @@ Typical workflow to build your own app:
    cd UA-WebApi-StarterKit/UaWebApiClient
    ```
 2. **Point the client at your Web API endpoint** — set its base URL to
-   `http://<device-ip>:8082` (the UA Cloud Action Web API) and configure the
-   `Authorization` header with your credentials/JWT.
-3. **Use the pre-built stubs** to invoke OPC UA services (`Browse` the address
-   space, `Read`/`Write` variables, `Call` methods, `HistoryRead`) with typed
-   requests/responses instead of hand-crafting JSON.
+   `http://<device-ip>:8082` (the UA Cloud Action Web API) and set the
+   `Authorization: Basic <base64(user:pass)>` header (mandatory) using your
+   `IOT_USERNAME` / `IOT_PASSWORD`.
+3. **Use the pre-built stubs** to invoke OPC UA services with typed
+   requests/responses instead of hand-crafting JSON. In this deployment the
+   available operations are **`Read`** and **`HistoryRead`** (reading current and
+   historical variable values); `Write`, `Browse`, and `Call` are not yet exposed
+   by the Web API.
 4. **(Optional) Generate model-specific classes.** For DataTypes from a custom
    information model, convert its NodeSet to an OpenAPI schema with the
    [Opc.Ua.ModelCompiler](https://github.com/OPCFoundation/UA-ModelCompiler), then
@@ -818,7 +832,7 @@ the K3s node itself (root of trust for all `hostPath` data).
 
 | STRIDE category | Representative threats in this stack | Mitigations already in place | Residual risk / gaps |
 |-----------------|--------------------------------------|------------------------------|----------------------|
-| **Spoofing** (identity) | A rogue client impersonates the Publisher or **UA Cloud Commander/Action** to the broker; an attacker impersonates a web UI user (Translator, Publisher, Grafana, UA Cloud Action, or Portainer); a fake OPC UA server feeds the Publisher; a forged `ua-action-request` triggers an OPC UA method. | MQTT broker requires username/password (`allow_anonymous false`); all web UIs (`:8080/:8081/:8082/:3000/:9443`) require login; OPC UA supports certificate exchange between Publisher/Commander and server. | Single shared credential set across all components (including Grafana/Portainer admin); no per-service identities or mutual TLS (mTLS); broker does not authenticate clients by certificate; any client that can publish to `commands` can drive Commander. |
+| **Spoofing** (identity) | A rogue client impersonates the Publisher or **UA Cloud Commander/Action** to the broker; an attacker impersonates a web UI user (Translator, Publisher, Grafana, UA Cloud Action, or Portainer); a fake OPC UA server feeds the Publisher; a forged `ua-action-request` triggers an OPC UA method; an unauthenticated caller hits the **OPC UA Web API**. | MQTT broker requires username/password (`allow_anonymous false`); all web UIs (`:8080/:8081/:8082/:3000/:9443`) require login; the **UA Cloud Action web UI and OPC UA Web API mandate HTTP Basic authentication on every request (no anonymous access)**; OPC UA supports certificate exchange between Publisher/Commander and server. | Single shared credential set across all components (including Grafana/Portainer admin and the Web API); Basic-auth credentials are only as safe as the transport (send over TLS in production); no per-service identities or mutual TLS (mTLS); broker does not authenticate clients by certificate; any client that can publish to `commands` can drive Commander. |
 | **Tampering** (integrity) | Modification of telemetry in transit; tampering with `hostPath` config/cert files on the node; editing the ConfigMaps; **altering the imported `opcua_model` data** or the model importer script; a malicious command writing/actuating an OPC UA node via Commander. | MQTT is carried over TLS (8883); config is delivered via Kubernetes ConfigMaps/Secrets; Commander/Action send spec-compliant OPC UA PubSub Action envelopes. | Telegraf and UA Cloud Action use TLS verification skip (`insecure_skip_verify` / `MQTT_TLS_INSECURE=true`), so a man-in-the-middle with any cert is accepted; `hostPath` volumes (`/influxdb2`, `/translator/*`, `/publisher/*`, `/commander/*`, `/portainer`, `/grafana`) are writable by anyone with node access; no message signing on payloads; Commander performs Writes/MethodCalls with no per-action authorization. |
 | **Repudiation** (auditability) | An operator changes a device mapping, publish set, Grafana dashboard, or issues a command and denies it; no record of who logged in or who imported a model. | Component logs are written to `hostPath` `logs` directories and pod stdout; Portainer records some cluster events. | No centralized, tamper-evident audit log; shared credentials make actions unattributable to an individual; command/action requests and model imports are not attributably logged; no log shipping or retention policy. |
 | **Information disclosure** (confidentiality) | Sniffing telemetry; reading credentials from the manifest; exposed dashboards (Grafana, Portainer, UA Cloud Action) on the node IP; leaking the **UA Cloud Library credentials** used by the import Job. | MQTT is encrypted with TLS; `INFLUX_TOKEN` is stored in a Kubernetes `Secret`; credentials are supplied at apply time (not committed to git). | Credentials (including UA Cloud Library and Grafana/Portainer admin) are injected as plain-text env vars (visible via `kubectl describe`/`exec`); Kubernetes Secrets are base64, not encrypted at rest by default; self-signed broker cert offers encryption but no server-identity assurance; all UIs are exposed on the node IP with no network policy. |
