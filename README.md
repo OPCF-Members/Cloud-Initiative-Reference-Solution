@@ -75,30 +75,11 @@ USB-to-M.2 adapter and Raspberry Pi Imager. Do this before assembling the unit.
 
 ### Hardware Installation
 
-> **Safety:** Power off and disconnect the DC input before opening the case.
-> Work on an anti-static surface and handle the CM5 and SSD by their edges.
-
 > **Image the SSD first.** Complete the [Software Installation](#software-installation-imaging-the-ssd)
 > steps below to write Raspberry Pi OS onto the NVMe SSD using the USB-to-M.2
 > adapter **before** installing the SSD into the enclosure. 
 
-1. **Open the enclosure.** Remove the screws securing the IPCBox-CM5-A cover to
-   expose the CM5 carrier board and the M.2 slot.
-2. **Install the (already-imaged) NVMe SSD.** Insert the SK NVMe 2242 128G SSD
-   into the M.2 M-Key slot at roughly a 30° angle, press it down flat, and secure
-   it with the provided M.2 standoff screw.
-3. **Install the Compute Module 5.** Align the two high-density connectors on the
-   CM5 with the mating connectors on the carrier board and press firmly and
-   evenly until the module seats fully. Fasten the CM5 mounting screws.
-4. **Apply the thermal interface.** Ensure the thermal pad between the CM5 SoC
-   and the aluminum case/heat spreader is in place so the enclosure can act as a
-   passive heatsink.
-5. **Reassemble the enclosure** and reinstall the cover screws.
-6. **Connect peripherals.** Attach the Ethernet cable, and (optionally, for
-   first-time console access) an HDMI monitor and USB keyboard.
-7. **Connect power.** Wire the DC input within the enclosure's rated voltage
-   range (7V to 36V, so a 24V industrial power supply is ideal, or simply use the supplied AC/DC adapter for bench testing) to the power terminal / jack and switch it on. The power/status LED
-   should illuminate and the device will boot from the NVMe SSD.
+Follow the instructions in the [Assembly Guide](https://docs.waveshare.com/IPCBOX-CM5-A/Assembly-Guide).
 
 #### First-Boot Configuration
 
