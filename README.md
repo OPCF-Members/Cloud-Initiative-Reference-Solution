@@ -248,22 +248,21 @@ on the Pi's NVMe SSD at:
 ```
 
 Because this is a host directory (not ephemeral pod storage), the telemetry
-**survives pod restarts, redeploys, and reboots**. A few related persistence
-paths are also mapped as `hostPath` volumes on the Pi:
+**survives pod restarts, redeploys, and reboots**. 
+
+Related OPC UA telemetry persistence paths are also mapped as `hostPath` volumes on the Pi:
 
 | Path on the Pi | Component | Contents |
 |----------------|-----------|----------|
 | `/influxdb2` | InfluxDB | Time-series telemetry, buckets, and InfluxDB config (the primary telemetry store). |
 | `/translator/settings`, `/translator/nodesets`, `/translator/pki`, `/translator/logs` | UA Edge Translator | Configuration, OPC UA nodesets, certificates, and logs. |
-| `/publisher/settings`, `/publisher/pki`, `/publisher/logs` | UA Cloud Publisher | Configuration, certificates, and logs. |
+| `/publisher/settings`, `/publisher/pki`, `/publisher/logs`, `/publisher/store` | UA Cloud Publisher | Configuration, certificates, logs, and the Store & Forward message store (queued messages held during broker/connectivity outages). |
 | `/commander/pki`, `/commander/logs` | UA Cloud Commander | OPC UA client certificates and logs. |
+| `/mosquitto` | Mosquitto | Broker persistence database (`mosquitto.db`: retained messages and queued messages for persistent sessions). |
 | `/portainer` | Portainer | Portainer database, users, and settings. |
 | `/grafana` | Grafana | Grafana database, users, and user-created dashboards. |
 
-> **Note:** the Mosquitto broker uses an `emptyDir` volume, so its queued
-> messages are **not** persisted across pod restarts — durable telemetry lives in
-> InfluxDB (`/influxdb2`). Back up `/influxdb2` to preserve historical data, and
-> keep the `INFLUX_TOKEN` needed to read it.
+> **Note:** Keep the `INFLUX_TOKEN` safe, to read the telemetry stored in InfluxDB in backup scenarios.
 
 ## Accessing the Web UIs
 
@@ -766,7 +765,7 @@ the K3s node itself (root of trust for all `hostPath` data).
 | **Tampering** (integrity) | Modification of telemetry in transit; tampering with `hostPath` config/cert files on the node; editing the ConfigMaps; **altering the imported `opcua_model` data** or the model importer script; a malicious command writing/actuating an OPC UA node via Commander. | MQTT is carried over TLS (8883); config is delivered via Kubernetes ConfigMaps/Secrets; Commander/Action send spec-compliant OPC UA PubSub Action envelopes. | Telegraf and UA Cloud Action use TLS verification skip (`insecure_skip_verify` / `MQTT_TLS_INSECURE=true`), so a man-in-the-middle with any cert is accepted; `hostPath` volumes (`/influxdb2`, `/translator/*`, `/publisher/*`, `/commander/*`, `/portainer`, `/grafana`) are writable by anyone with node access; no message signing on payloads; Commander performs Writes/MethodCalls with no per-action authorization. |
 | **Repudiation** (auditability) | An operator changes a device mapping, publish set, Grafana dashboard, or issues a command and denies it; no record of who logged in or who imported a model. | Component logs are written to `hostPath` `logs` directories and pod stdout; Portainer records some cluster events. | No centralized, tamper-evident audit log; shared credentials make actions unattributable to an individual; command/action requests and model imports are not attributably logged; no log shipping or retention policy. |
 | **Information disclosure** (confidentiality) | Sniffing telemetry; reading credentials from the manifest; exposed dashboards (Grafana, Portainer, UA Cloud Action) on the node IP; leaking the **UA Cloud Library credentials** used by the import Job. | MQTT is encrypted with TLS; `INFLUX_TOKEN` is stored in a Kubernetes `Secret`; credentials are supplied at apply time (not committed to git). | Credentials (including UA Cloud Library and Grafana/Portainer admin) are injected as plain-text env vars (visible via `kubectl describe`/`exec`); Kubernetes Secrets are base64, not encrypted at rest by default; self-signed broker cert offers encryption but no server-identity assurance; all UIs are exposed on the node IP with no network policy. |
-| **Denial of service** (availability) | Flooding the broker or web UIs; filling the node disk with telemetry or repeated model imports; a crash loop; a runaway feedback loop from UA Cloud Action. | Liveness/readiness probes restart unhealthy pods; single-replica deployments recover automatically; the importer is a short-lived Job with `ttlSecondsAfterFinished`; **UA Cloud Action has a built-in rate limiter that bounds how often it actuates**. | No rate limiting, quotas, or `resources` requests/limits on the other pods; unbounded InfluxDB growth on the local SSD (now including `opcua_model` points); a single node is a single point of failure; broker uses `emptyDir` (queued messages lost on restart); UA Cloud Action's rate limit still needs tuning for your environment. |
+a single node is a single point of failure; broker persists to `hostPath` (`/mosquitto`), reducing message loss on restart though the single node remains a SPOF; UA Cloud Action's rate limit still needs tuning for your environment. |
 | **Elevation of privilege** (authorization) | Container escape to the node; a compromised pod reading another component's data via shared host paths; using the InfluxDB admin token for full DB control; **abusing Portainer's `cluster-admin` ServiceAccount to take over the whole cluster**; using Commander/Action to reach and control OT devices. | Distinct container images per component; `nodeSelector` pins workloads to Linux; the importer Job uses `restartPolicy: Never`. | Containers run with default (often root) user and no `securityContext`; no `NetworkPolicy` isolation between pods; the InfluxDB token is an all-powerful admin token; **Portainer is bound to `cluster-admin`, so compromising it compromises the cluster**; Commander bridges IT→OT with method-call/write capability and no fine-grained authorization; no RBAC scoping for the workloads. |
 
 ### Production Hardening Recommendations

@@ -140,6 +140,8 @@ spec:
           mountPath: "/app/pki"
         - name: "logs"
           mountPath: "/app/logs"
+        - name: "store"
+          mountPath: "/app/store"
       volumes:
         - name: "settings"
           hostPath:
@@ -156,6 +158,9 @@ spec:
         - name: "logs"
           hostPath:
             path: "/publisher/logs"
+        - name: "store"
+          hostPath:
+            path: "/publisher/store"
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -519,7 +524,8 @@ spec:
               - key: mosquitto.conf
                 path: mosquitto.conf
         - name: mosquitto-data
-          emptyDir: {}
+          hostPath:
+            path: "/mosquitto"
         - name: mosquitto-certs
           emptyDir: {}
 ---
