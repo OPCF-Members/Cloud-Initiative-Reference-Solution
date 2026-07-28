@@ -61,23 +61,16 @@ USB-to-M.2 adapter and Raspberry Pi Imager. Do this before assembling the unit.
 1. **Insert the SSD into the USB-to-M.2 adapter.** Seat the SK NVMe 2242 128G SSD
    in the adapter's M-Key slot and secure it, then plug the adapter into a USB 3.x
    port on your PC. The drive should enumerate as a USB mass-storage device.
-2. **Install Raspberry Pi Imager** on the PC from
-   <https://www.raspberrypi.com/software/> and launch it.
-3. **Select the target device:** click **CHOOSE DEVICE** and pick
-   **Raspberry Pi Compute Module 5**.
-4. **Select the OS:** click **CHOOSE OS** and pick
-   **Raspberry Pi OS Lite (64-bit)** (recommended for a headless edge gateway) or
-   the full **Raspberry Pi OS (64-bit)**.
-5. **Select the storage:** click **CHOOSE STORAGE** and pick the SK NVMe SSD
-   presented through the USB-to-M.2 adapter.
+2. **Install Raspberry Pi Imager** on the PC from <https://www.raspberrypi.com/software/> and launch it.
+3. **Select Device:** Pick **Raspberry Pi 5**.
+4. **Select OS:** Click **Raspberry Pi OS (other)** and pick **Raspberry Pi OS Lite (64-bit)**.
+5. **Select Storage:** Pick the SK NVMe SSD presented through the USB-to-M.2 adapter.
    > ⚠️ Double-check you are selecting the SSD and not another drive on your PC —
    > imaging is destructive and erases the selected device.
-6. **Pre-configure OS settings:** click **NEXT → EDIT SETTINGS** and set the
-   **hostname**, **username/password**, **Wi‑Fi** (if used), **locale/timezone**,
+6. **Customization:** Set the **hostname**, **username/password**, **Wi‑Fi** (if used), **locale/timezone**,
    and enable **SSH** on the Services tab. This allows a fully headless first boot.
-7. **Write and verify.** Click **SAVE → YES → WRITE** and wait for Imager to write
-   and verify the image.
-8. **Eject** the adapter, remove the SSD, and proceed to the
+7. **Writing:** Click **WRITE** and wait for Imager to write and verify the image.
+8. **Finish:** Close the imager, eject the adapter, remove the SSD, and proceed to the
    [Hardware Installation](#hardware-installation) to assemble the device.
 
 ### Hardware Installation
