@@ -80,6 +80,7 @@ USB-to-M.2 adapter and Raspberry Pi Imager. Do this before assembling the unit.
 > adapter **before** installing the SSD into the enclosure. 
 
 Follow the instructions in the [Assembly Guide](https://docs.waveshare.com/IPCBOX-CM5-A/Assembly-Guide).
+> ⚠️ If you bought the CM5 with WiFi, don't forget to plug the antenna cable into the CM5 board before assembly!
 
 #### First-Boot Configuration
 
