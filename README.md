@@ -10,6 +10,11 @@ OPC Foundation Cloud Initiative Open-Source Reference Solution
   - [Install K3s on the Pi](#install-k3s-on-the-pi)
   - [Apply the Stack Manifests](#apply-the-stack-manifests)
   - [Where Telemetry Data Is Persisted](#where-telemetry-data-is-persisted)
+- [Simulated Production Line](#simulated-production-line)
+  - [Data Flows Immediately](#data-flows-immediately)
+- [Automatic Certificate Provisioning (GDS Server Push)](#automatic-certificate-provisioning-gds-server-push)
+  - [What Happens](#what-happens)
+  - [Using It Manually](#using-it-manually)
 - [Accessing the Web UIs](#accessing-the-web-uis)
 - [Managing the Cluster with Portainer](#managing-the-cluster-with-portainer)
 - [Onboarding an OPC UA Device](#onboarding-an-opc-ua-device)
@@ -45,12 +50,15 @@ Kubernetes cluster (**K3s**):
 | Manifest | Namespace | Components |
 |----------|-----------|------------|
 | [`edge.yaml`](./edge.yaml) | `edge` | UA Edge Translator, UA Cloud Publisher, UA Cloud Commander |
+| [`edge.yaml`](./edge.yaml) | `munich` | Simulated production line (MES, assembly, test, packaging stations) |
 | [`cloud.yaml`](./cloud.yaml) | `cloud` | Mosquitto, Telegraf, InfluxDB, Grafana, Portainer, UA Cloud Action |
 
 The **edge** part contains the components that sit next to the machines and speak
-OPC UA / industrial protocols. The **cloud** part contains the broker, storage,
-visualization, and management components that would typically run in a data
-centre or public cloud.
+OPC UA / industrial protocols, plus a **simulated production line** so the stack
+produces real OPC UA telemetry out of the box (see
+[Simulated Production Line](#simulated-production-line)). The **cloud** part
+contains the broker, storage, visualization, and management components that would
+typically run in a data centre or public cloud.
 
 > **For convenience, everything can be installed on a single K3s instance** 
 > Simply apply both manifests to the same cluster; the two namespaces
@@ -70,6 +78,7 @@ table above for which manifest/namespace each component belongs to):
 | **ua-edgetranslator** | `ghcr.io/opcfoundation/ua-edgetranslator:main` | OPC Foundation **UA Edge Translator** — connects to southbound assets and translates protocols (LoRaWAN, OCPP, etc.) into an OPC UA information model. Exposes a web UI for configuration. | 4840 (OPC UA server), 5000/5001 (LoRaWAN), 19520/19521 (OCPP), **8080 (web UI)** |
 | **ua-cloudpublisher** | `ghcr.io/barnstee/ua-cloudpublisher:main` | **UA Cloud Publisher** — subscribes to OPC UA data (from the edge translator) and publishes it as **OPC UA PubSub** JSON messages to the MQTT broker. Exposes a web UI for configuration. | **8081 (web UI)** |
 | **ua-cloudcommander** | `ghcr.io/opcfoundation/ua-cloudcommander:main` | OPC Foundation **UA Cloud Commander** — the command & control **Responder**. Subscribes to the Mosquitto `commands/#` topic for `ua-action-request` messages, executes OPC UA operations (Read, HistoricalRead, Write, MethodCall) against on-premises OPC UA servers (e.g. the Edge Translator), and publishes `ua-action-response` messages back to the `responses` topic. Has no web UI. | — |
+| **mes / assembly / test / packaging** | `ghcr.io/digitaltwinconsortium/manufacturingontologies:main` | **Simulated production line "Munich"** — four OPC UA servers modelling a factory line (MES shift schedule plus assembly, test and packaging stations). Provides live OPC UA telemetry so the stack has data flowing immediately. | 4840 (OPC UA server, each) |
 | **mosquitto** | `eclipse-mosquitto:2.0.18` | **Eclipse Mosquitto** MQTT broker that carries the OPC UA PubSub `data/#` and `metadata` messages between the publisher and Telegraf. Configured via `mosquitto-conf` (TLS + authentication required with the `IOT_USERNAME` / `IOT_PASSWORD` credentials supplied at apply time, exposed to the broker via the `MOSQUITTO_USERNAME` / `MOSQUITTO_PASSWORD` env vars, TLS listener on 8883). | 8883 (MQTT/TLS) |
 | **telegraf** | `telegraf:1.37-alpine` | **Telegraf** agent that consumes the MQTT PubSub messages, parses them with the `json_v2` parser (defined in the `telegraf-conf` ConfigMap), and writes them into InfluxDB. Measurements: `opcua_pubsub` (data) and `opcua_metadata` (metadata). | — |
 | **influxdb** | `influxdb:2.7` | **InfluxDB 2.7** time-series database that stores the ingested telemetry. Initialized with org `iot`, bucket `mqtt`, and admin user set to your `IOT_USERNAME`. Exposes a web UI (Data Explorer / dashboards). | **8086 (web UI/API)** |
@@ -195,11 +204,134 @@ Related OPC UA telemetry persistence paths are also mapped as `hostPath` volumes
 | `/translator/settings`, `/translator/nodesets`, `/translator/pki`, `/translator/logs` | UA Edge Translator | Configuration, OPC UA nodesets, certificates, and logs. |
 | `/publisher/settings`, `/publisher/pki`, `/publisher/logs`, `/publisher/store` | UA Cloud Publisher | Configuration, certificates, logs, and the Store & Forward message store (queued messages held during broker/connectivity outages). |
 | `/commander/pki`, `/commander/logs` | UA Cloud Commander | OPC UA client certificates and logs. |
+| `/productionline/munich/<station>/pki`, `/productionline/munich/<station>/logs` | Simulated production line | OPC UA server certificates and logs for each simulated station (`mes`, `assembly`, `test`, `packaging`). |
 | `/mosquitto` | Mosquitto | Broker persistence database (`mosquitto.db`: retained messages and queued messages for persistent sessions). |
 | `/portainer` | Portainer | Portainer database, users, and settings. |
 | `/grafana` | Grafana | Grafana database, users, and user-created dashboards. |
 
 > **Note:** Keep the `INFLUX_TOKEN` safe, to read the telemetry stored in InfluxDB in backup scenarios.
+
+## Simulated Production Line
+
+So that the stack produces meaningful OPC UA telemetry immediately — without any
+physical machines — `edge.yaml` also deploys a **software-only factory
+simulation** taken from the Digital Twin Consortium
+[Manufacturing Ontologies](https://github.com/digitaltwinconsortium/ManufacturingOntologies#production-line-simulation)
+reference solution.
+
+One production line, named **Munich**, is deployed into its own `munich`
+namespace. It consists of four OPC UA servers:
+
+| Station | Role | OPC UA endpoint |
+|---------|------|-----------------|
+| **mes** | Manufacturing Execution System — drives the shift schedule (Morning / Afternoon / Night) for the line. | `opc.tcp://mes.munich/` |
+| **assembly** | Assembly station (200 W, 6 s cycle time). | `opc.tcp://assembly.munich/` |
+| **test** | Test station (100 W, 6 s cycle time). | `opc.tcp://test.munich/` |
+| **packaging** | Packaging station (100 W, 6 s cycle time). | `opc.tcp://packaging.munich/` |
+
+Each station simulates a real machine, exposing OPC UA variables such as
+production status, pressure, energy consumption, and product counts, and it
+implements OPC UA methods (e.g. opening a pressure relief valve) that the
+[command & control path](#command--control-with-ua-cloud-commander) can invoke.
+
+> The stations run in the `munich` namespace on purpose: their in-cluster DNS
+> names (`mes.munich`, `assembly.munich`, …) then match the OPC UA application
+> URIs the stations advertise, so the endpoint URLs in the Publisher's
+> configuration resolve without modification.
+
+### Data Flows Immediately
+
+UA Cloud Publisher is pre-seeded with a **published-nodes persistency file**
+(`persistency.json`, taken from the Manufacturing Ontologies Munich
+configuration) listing the nodes to subscribe to on each station. Because the
+seeded `settings.json` sets `AutoLoadPersistedNodes: true`, the Publisher loads
+this list on startup and begins publishing OPC UA PubSub messages to Mosquitto
+right away — telemetry appears in InfluxDB and Grafana without any manual
+onboarding.
+
+To guarantee correct start-up order, the Publisher pod runs a
+**`wait-for-productionline` init container** that blocks until every station is
+accepting OPC UA connections on port 4840:
+
+```bash
+# watch the simulation come up
+kubectl get pods -n munich -w
+
+# the Publisher stays in Init: until the line is ready
+kubectl get pods -n edge
+kubectl logs -n edge deploy/ua-cloudpublisher -c wait-for-productionline
+```
+
+Both seeded files are only copied if they are not already present, so any changes
+you later make through the Publisher UI are preserved across restarts.
+
+> **Don't want the simulation?** Delete the `munich` namespace
+> (`kubectl delete namespace munich`) and remove the `wait-for-productionline`
+> init container plus the `persistency.json` entries from `edge.yaml`, then
+> onboard your real devices as described in
+> [Onboarding an OPC UA Device](#onboarding-an-opc-ua-device).
+
+## Automatic Certificate Provisioning (GDS Server Push)
+
+OPC UA is secure by default: a client and a server will only talk to each other
+once they **mutually trust** each other's X.509 certificates. Normally that means
+manually copying certificates into each server's trust list before publishing can
+start.
+
+The seeded UA Cloud Publisher configuration enables the **GDS Server Push**
+feature (`"PushCertsBeforePublishing": true`), which automates this entirely.
+UA Cloud Publisher acts as a lightweight **Global Discovery Server (GDS)** and
+uses the OPC UA *Server Push Configuration* interface (OPC UA Part 12) to
+provision certificates into each OPC UA server it is about to publish from.
+
+### What Happens
+
+Whenever the Publisher is about to process a published-nodes / `persistency.json`
+file (or upload a WoT file to the Edge Translator), it performs the following
+against each target OPC UA server:
+
+1. **Connects** to the server's endpoint using administrator credentials — the
+   ones stored with the endpoint, falling back to the `OPCUA_USERNAME` /
+   `OPCUA_PASSWORD` environment variables (i.e. your `IOT_USERNAME` /
+   `IOT_PASSWORD`).
+2. **Requests a Certificate Signing Request (CSR)** from the server, asking it to
+   **regenerate its private key** (rather than reuse the existing one — older
+   sub-2048-bit keys are rejected by modern servers with
+   `BadCertificatePolicyCheckFailed`).
+3. **Signs the CSR** with the Publisher's own issuer (CA) certificate.
+4. **Pushes the new certificate** and the issuer chain back to the server
+   (`UpdateCertificate`).
+5. **Adds the server's new certificate to the Publisher's own trust list**, so the
+   Publisher keeps trusting the server.
+6. **Pushes the Publisher's trust list to the server** (`UpdateTrustList`) so the
+   server trusts the Publisher in return.
+7. **Applies the changes** on the server and disconnects.
+
+The result is a fully automated, mutually trusted, certificate-based OPC UA
+security relationship — no manual certificate exchange required. This is why the
+[simulated production line](#simulated-production-line) starts streaming data as
+soon as it is up, and why onboarding real OPC UA devices usually needs no manual
+trust step.
+
+### Using It Manually
+
+- The Publisher UI's **Browse** view has a **Push Certificate** action to trigger
+  a GDS push against the currently connected server on demand.
+- The **Cert Manager** page lets you inspect the Publisher's trust list, download
+  it as a ZIP, and add/remove trusted certificates.
+- The behaviour is toggled by **"Push new OPC UA certificates to server before WoT
+  file upload or before processing published nodes files (GDS Server Push
+  feature)"** on the **Configuration** page (the `PushCertsBeforePublishing`
+  setting).
+
+> **Requirements & caveats:** the target server must implement the OPC UA Server
+> Push Configuration model and the supplied credentials must map to a role allowed
+> to update certificates (typically `SecurityAdmin`). Servers that don't support
+> push, or reject the admin credentials, simply log a `GDS server push failed`
+> error — you then fall back to exchanging certificates manually. Note that
+> pushing replaces the server's certificate with one issued by the Publisher's CA,
+> which is appropriate for this reference deployment but should be reviewed
+> against your PKI policy in production.
 
 ## Accessing the Web UIs
 
@@ -263,6 +395,9 @@ Translator has already exposed).
    `OPCUA_PASSWORD`, i.e. the `IOT_USERNAME` / `IOT_PASSWORD` you set) and click **Connect**.
    > On first connect the client and server exchange certificates. If the UA Cloud Publisher
    > connection is rejected, trust its certificate in the OPC UA device and retry.
+   > If the device supports the OPC UA Server Push Configuration model, the
+   > Publisher can provision the trust relationship for you automatically — see
+   > [Automatic Certificate Provisioning (GDS Server Push)](#automatic-certificate-provisioning-gds-server-push).
 4. **Browse** the device's address space and select the variable nodes you want
    to publish and click the 'publish' button.
 5. The Publisher immediately begins sending OPC UA PubSub JSON messages to Mosquitto (`data/#`), and the metadata

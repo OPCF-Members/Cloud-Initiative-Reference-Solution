@@ -1,4 +1,4 @@
-﻿apiVersion: v1
+apiVersion: v1
 kind: Namespace
 metadata:
   name: edge
@@ -106,9 +106,26 @@ spec:
       nodeSelector:
         "kubernetes.io/os": linux
       initContainers:
-      # Seed the broker connection / metadata configuration on first start so the
-      # "Configuring the Broker Connection and Metadata" UI steps are not needed.
-      # The file is only copied if the operator has not already saved settings,
+      # Wait until every simulated production line station is accepting OPC UA
+      # connections, so the Publisher's auto-loaded persistency.json can subscribe
+      # to them straight away instead of failing on first connect.
+      - name: wait-for-productionline
+        image: busybox:1.36
+        command: ["/bin/sh", "-c"]
+        args:
+          - |
+            for station in mes assembly test packaging; do
+              echo "Waiting for $station.munich:4840 ..."
+              until nc -z -w 2 "$station.munich" 4840; do
+                sleep 5
+              done
+              echo "$station is up"
+            done
+            echo "Production line 'munich' is ready"
+      # Seed the broker connection / metadata configuration and the published-nodes
+      # persistency on first start so the "Configuring the Broker Connection and
+      # Metadata" UI steps are not needed and data flows immediately.
+      # Files are only copied if the operator has not already saved settings,
       # so any later changes made through the UI are preserved.
       - name: seed-settings
         image: busybox:1.36
@@ -120,6 +137,12 @@ spec:
               cp /seed/settings.json /app/settings/settings.json
             else
               echo "settings.json already present; leaving existing configuration untouched"
+            fi
+            if [ ! -f /app/settings/persistency.json ]; then
+              echo "Seeding default UA Cloud Publisher persistency.json (Munich production line)"
+              cp /seed/persistency.json /app/settings/persistency.json
+            else
+              echo "persistency.json already present; leaving existing published nodes untouched"
             fi
         volumeMounts:
         - name: "settings"
@@ -160,6 +183,8 @@ spec:
             items:
               - key: settings.json
                 path: settings.json
+              - key: persistency.json
+                path: persistency.json
         - name: "pki"
           hostPath:
             path: "/publisher/pki"
@@ -225,6 +250,271 @@ data:
       "AzureOpenAIAPIKey": null,
       "AzureOpenAIDeploymentName": null
     }
+  # Published-nodes persistency seeded so the Publisher immediately subscribes to
+  # the simulated Munich production line stations (auto-loaded because
+  # AutoLoadPersistedNodes is true above).
+  persistency.json: |
+    [
+      {
+        "EndpointUrl": "opc.tcp://mes.munich/",
+        "OpcNodes": [
+          {
+            "Id": "nsu=http://opcfoundation.org/UA/Station-MES/;s=Morning",
+            "OpcSamplingInterval": 500,
+            "OpcPublishingInterval": 1000,
+            "HeartbeatInterval": 0,
+            "SkipFirst": false
+          },
+          {
+            "Id": "nsu=http://opcfoundation.org/UA/Station-MES/;s=Afternoon",
+            "OpcSamplingInterval": 500,
+            "OpcPublishingInterval": 1000,
+            "HeartbeatInterval": 0,
+            "SkipFirst": false
+          },
+          {
+            "Id": "nsu=http://opcfoundation.org/UA/Station-MES/;s=Night",
+            "OpcSamplingInterval": 500,
+            "OpcPublishingInterval": 1000,
+            "HeartbeatInterval": 0,
+            "SkipFirst": false
+          }
+        ],
+        "OpcEvents": [],
+        "OpcAuthenticationMode": "Anonymous"
+      },
+      {
+        "EndpointUrl": "opc.tcp://assembly.munich/",
+        "OpcNodes": [
+          {
+            "Id": "nsu=http://opcfoundation.org/UA/Station/;i=379",
+            "OpcSamplingInterval": 500,
+            "OpcPublishingInterval": 1000,
+            "HeartbeatInterval": 0,
+            "SkipFirst": false
+          },
+          {
+            "Id": "nsu=http://opcfoundation.org/UA/Station/;i=385",
+            "OpcSamplingInterval": 500,
+            "OpcPublishingInterval": 1000,
+            "HeartbeatInterval": 0,
+            "SkipFirst": false
+          },
+          {
+            "Id": "nsu=http://opcfoundation.org/UA/Station/;i=391",
+            "OpcSamplingInterval": 500,
+            "OpcPublishingInterval": 1000,
+            "HeartbeatInterval": 0,
+            "SkipFirst": false
+          },
+          {
+            "Id": "nsu=http://opcfoundation.org/UA/Station/;i=398",
+            "OpcSamplingInterval": 500,
+            "OpcPublishingInterval": 1000,
+            "HeartbeatInterval": 0,
+            "SkipFirst": false
+          },
+          {
+            "Id": "nsu=http://opcfoundation.org/UA/Station/;i=399",
+            "OpcSamplingInterval": 500,
+            "OpcPublishingInterval": 1000,
+            "HeartbeatInterval": 0,
+            "SkipFirst": false
+          },
+          {
+            "Id": "nsu=http://opcfoundation.org/UA/Station/;i=400",
+            "OpcSamplingInterval": 500,
+            "OpcPublishingInterval": 1000,
+            "HeartbeatInterval": 0,
+            "SkipFirst": false
+          },
+          {
+            "Id": "nsu=http://opcfoundation.org/UA/Station/;i=406",
+            "OpcSamplingInterval": 500,
+            "OpcPublishingInterval": 1000,
+            "HeartbeatInterval": 0,
+            "SkipFirst": false
+          },
+          {
+            "Id": "nsu=http://opcfoundation.org/UA/Station/;i=412",
+            "OpcSamplingInterval": 500,
+            "OpcPublishingInterval": 1000,
+            "HeartbeatInterval": 0,
+            "SkipFirst": false
+          },
+          {
+            "Id": "nsu=http://opcfoundation.org/UA/Station/;i=418",
+            "OpcSamplingInterval": 500,
+            "OpcPublishingInterval": 1000,
+            "HeartbeatInterval": 0,
+            "SkipFirst": false
+          },
+          {
+            "Id": "nsu=http://opcfoundation.org/UA/Station/;i=434",
+            "OpcSamplingInterval": 500,
+            "OpcPublishingInterval": 1000,
+            "HeartbeatInterval": 0,
+            "SkipFirst": false
+          }
+        ],
+        "OpcEvents": [],
+        "OpcAuthenticationMode": "Anonymous"
+      },
+      {
+        "EndpointUrl": "opc.tcp://test.munich/",
+        "OpcNodes": [
+          {
+            "Id": "nsu=http://opcfoundation.org/UA/Station/;i=379",
+            "OpcSamplingInterval": 500,
+            "OpcPublishingInterval": 1000,
+            "HeartbeatInterval": 0,
+            "SkipFirst": false
+          },
+          {
+            "Id": "nsu=http://opcfoundation.org/UA/Station/;i=385",
+            "OpcSamplingInterval": 500,
+            "OpcPublishingInterval": 1000,
+            "HeartbeatInterval": 0,
+            "SkipFirst": false
+          },
+          {
+            "Id": "nsu=http://opcfoundation.org/UA/Station/;i=391",
+            "OpcSamplingInterval": 500,
+            "OpcPublishingInterval": 1000,
+            "HeartbeatInterval": 0,
+            "SkipFirst": false
+          },
+          {
+            "Id": "nsu=http://opcfoundation.org/UA/Station/;i=398",
+            "OpcSamplingInterval": 500,
+            "OpcPublishingInterval": 1000,
+            "HeartbeatInterval": 0,
+            "SkipFirst": false
+          },
+          {
+            "Id": "nsu=http://opcfoundation.org/UA/Station/;i=399",
+            "OpcSamplingInterval": 500,
+            "OpcPublishingInterval": 1000,
+            "HeartbeatInterval": 0,
+            "SkipFirst": false
+          },
+          {
+            "Id": "nsu=http://opcfoundation.org/UA/Station/;i=400",
+            "OpcSamplingInterval": 500,
+            "OpcPublishingInterval": 1000,
+            "HeartbeatInterval": 0,
+            "SkipFirst": false
+          },
+          {
+            "Id": "nsu=http://opcfoundation.org/UA/Station/;i=406",
+            "OpcSamplingInterval": 500,
+            "OpcPublishingInterval": 1000,
+            "HeartbeatInterval": 0,
+            "SkipFirst": false
+          },
+          {
+            "Id": "nsu=http://opcfoundation.org/UA/Station/;i=412",
+            "OpcSamplingInterval": 500,
+            "OpcPublishingInterval": 1000,
+            "HeartbeatInterval": 0,
+            "SkipFirst": false
+          },
+          {
+            "Id": "nsu=http://opcfoundation.org/UA/Station/;i=418",
+            "OpcSamplingInterval": 500,
+            "OpcPublishingInterval": 1000,
+            "HeartbeatInterval": 0,
+            "SkipFirst": false
+          },
+          {
+            "Id": "nsu=http://opcfoundation.org/UA/Station/;i=434",
+            "OpcSamplingInterval": 500,
+            "OpcPublishingInterval": 1000,
+            "HeartbeatInterval": 0,
+            "SkipFirst": false
+          }
+        ],
+        "OpcEvents": [],
+        "OpcAuthenticationMode": "Anonymous"
+      },
+      {
+        "EndpointUrl": "opc.tcp://packaging.munich/",
+        "OpcNodes": [
+          {
+            "Id": "nsu=http://opcfoundation.org/UA/Station/;i=379",
+            "OpcSamplingInterval": 500,
+            "OpcPublishingInterval": 1000,
+            "HeartbeatInterval": 0,
+            "SkipFirst": false
+          },
+          {
+            "Id": "nsu=http://opcfoundation.org/UA/Station/;i=385",
+            "OpcSamplingInterval": 500,
+            "OpcPublishingInterval": 1000,
+            "HeartbeatInterval": 0,
+            "SkipFirst": false
+          },
+          {
+            "Id": "nsu=http://opcfoundation.org/UA/Station/;i=391",
+            "OpcSamplingInterval": 500,
+            "OpcPublishingInterval": 1000,
+            "HeartbeatInterval": 0,
+            "SkipFirst": false
+          },
+          {
+            "Id": "nsu=http://opcfoundation.org/UA/Station/;i=398",
+            "OpcSamplingInterval": 500,
+            "OpcPublishingInterval": 1000,
+            "HeartbeatInterval": 0,
+            "SkipFirst": false
+          },
+          {
+            "Id": "nsu=http://opcfoundation.org/UA/Station/;i=399",
+            "OpcSamplingInterval": 500,
+            "OpcPublishingInterval": 1000,
+            "HeartbeatInterval": 0,
+            "SkipFirst": false
+          },
+          {
+            "Id": "nsu=http://opcfoundation.org/UA/Station/;i=400",
+            "OpcSamplingInterval": 500,
+            "OpcPublishingInterval": 1000,
+            "HeartbeatInterval": 0,
+            "SkipFirst": false
+          },
+          {
+            "Id": "nsu=http://opcfoundation.org/UA/Station/;i=406",
+            "OpcSamplingInterval": 500,
+            "OpcPublishingInterval": 1000,
+            "HeartbeatInterval": 0,
+            "SkipFirst": false
+          },
+          {
+            "Id": "nsu=http://opcfoundation.org/UA/Station/;i=412",
+            "OpcSamplingInterval": 500,
+            "OpcPublishingInterval": 1000,
+            "HeartbeatInterval": 0,
+            "SkipFirst": false
+          },
+          {
+            "Id": "nsu=http://opcfoundation.org/UA/Station/;i=418",
+            "OpcSamplingInterval": 500,
+            "OpcPublishingInterval": 1000,
+            "HeartbeatInterval": 0,
+            "SkipFirst": false
+          },
+          {
+            "Id": "nsu=http://opcfoundation.org/UA/Station/;i=434",
+            "OpcSamplingInterval": 500,
+            "OpcPublishingInterval": 1000,
+            "HeartbeatInterval": 0,
+            "SkipFirst": false
+          }
+        ],
+        "OpcEvents": [],
+        "OpcAuthenticationMode": "Anonymous"
+      }
+    ]
 ---
 apiVersion: v1
 kind: Service
@@ -299,3 +589,276 @@ spec:
         - name: "logs"
           hostPath:
             path: "/commander/logs"
+---
+# ---------------------------------------------------------------------------
+# Simulated production line "Munich"
+#
+# A software-only factory simulation from the Digital Twin Consortium
+# Manufacturing Ontologies reference solution. It runs four OPC UA servers that
+# together model a production line:
+#   * mes       - Manufacturing Execution System (shift schedule)
+#   * assembly  - assembly station
+#   * test      - test station
+#   * packaging - packaging station
+#
+# Each station is an OPC UA server listening on port 4840. They live in their own
+# "munich" namespace so their in-cluster DNS names match the OPC UA application
+# URIs the stations advertise (opc.tcp://<station>.munich/), which is exactly what
+# the seeded UA Cloud Publisher persistency.json subscribes to.
+# ---------------------------------------------------------------------------
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: munich
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mes
+  namespace: munich
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mes
+  template:
+    metadata:
+      labels:
+        app: mes
+    spec:
+      nodeSelector:
+        "kubernetes.io/os": linux
+      containers:
+      - name: mes
+        image: ghcr.io/digitaltwinconsortium/manufacturingontologies:main
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: StationType
+          value: "mes"
+        - name: StationURI
+          value: "opc.tcp://mes.munich/"
+        - name: FactoryTimeZone
+          value: "Europe/Berlin"
+        - name: ProductionLineName
+          value: "munich"
+        - name: OPCUA_USERNAME
+          value: "${IOT_USERNAME}"
+        - name: OPCUA_PASSWORD
+          value: "${IOT_PASSWORD}"
+        ports:
+        - containerPort: 4840
+          name: opcua
+        volumeMounts:
+        - name: "logs"
+          mountPath: "/app/logs"
+        - name: "pki"
+          mountPath: "/app/pki"
+      volumes:
+        - name: "logs"
+          hostPath:
+            path: "/productionline/munich/mes/logs"
+        - name: "pki"
+          hostPath:
+            path: "/productionline/munich/mes/pki"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mes
+  namespace: munich
+spec:
+  ports:
+  - name: opcua
+    targetPort: 4840
+    port: 4840
+  selector:
+    app: mes
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: assembly
+  namespace: munich
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: assembly
+  template:
+    metadata:
+      labels:
+        app: assembly
+    spec:
+      nodeSelector:
+        "kubernetes.io/os": linux
+      containers:
+      - name: assembly
+        image: ghcr.io/digitaltwinconsortium/manufacturingontologies:main
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: StationType
+          value: "assembly"
+        - name: StationURI
+          value: "opc.tcp://assembly.munich/"
+        - name: PowerConsumption
+          value: "200"
+        - name: CycleTime
+          value: "6"
+        - name: OPCUA_USERNAME
+          value: "${IOT_USERNAME}"
+        - name: OPCUA_PASSWORD
+          value: "${IOT_PASSWORD}"
+        ports:
+        - containerPort: 4840
+          name: opcua
+        volumeMounts:
+        - name: "logs"
+          mountPath: "/app/logs"
+        - name: "pki"
+          mountPath: "/app/pki"
+      volumes:
+        - name: "logs"
+          hostPath:
+            path: "/productionline/munich/assembly/logs"
+        - name: "pki"
+          hostPath:
+            path: "/productionline/munich/assembly/pki"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: assembly
+  namespace: munich
+spec:
+  ports:
+  - name: opcua
+    targetPort: 4840
+    port: 4840
+  selector:
+    app: assembly
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: test
+  namespace: munich
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: test
+  template:
+    metadata:
+      labels:
+        app: test
+    spec:
+      nodeSelector:
+        "kubernetes.io/os": linux
+      containers:
+      - name: test
+        image: ghcr.io/digitaltwinconsortium/manufacturingontologies:main
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: StationType
+          value: "test"
+        - name: StationURI
+          value: "opc.tcp://test.munich/"
+        - name: PowerConsumption
+          value: "100"
+        - name: CycleTime
+          value: "6"
+        - name: OPCUA_USERNAME
+          value: "${IOT_USERNAME}"
+        - name: OPCUA_PASSWORD
+          value: "${IOT_PASSWORD}"
+        ports:
+        - containerPort: 4840
+          name: opcua
+        volumeMounts:
+        - name: "logs"
+          mountPath: "/app/logs"
+        - name: "pki"
+          mountPath: "/app/pki"
+      volumes:
+        - name: "logs"
+          hostPath:
+            path: "/productionline/munich/test/logs"
+        - name: "pki"
+          hostPath:
+            path: "/productionline/munich/test/pki"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: test
+  namespace: munich
+spec:
+  ports:
+  - name: opcua
+    targetPort: 4840
+    port: 4840
+  selector:
+    app: test
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: packaging
+  namespace: munich
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: packaging
+  template:
+    metadata:
+      labels:
+        app: packaging
+    spec:
+      nodeSelector:
+        "kubernetes.io/os": linux
+      containers:
+      - name: packaging
+        image: ghcr.io/digitaltwinconsortium/manufacturingontologies:main
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: StationType
+          value: "packaging"
+        - name: StationURI
+          value: "opc.tcp://packaging.munich/"
+        - name: PowerConsumption
+          value: "100"
+        - name: CycleTime
+          value: "6"
+        - name: OPCUA_USERNAME
+          value: "${IOT_USERNAME}"
+        - name: OPCUA_PASSWORD
+          value: "${IOT_PASSWORD}"
+        ports:
+        - containerPort: 4840
+          name: opcua
+        volumeMounts:
+        - name: "logs"
+          mountPath: "/app/logs"
+        - name: "pki"
+          mountPath: "/app/pki"
+      volumes:
+        - name: "logs"
+          hostPath:
+            path: "/productionline/munich/packaging/logs"
+        - name: "pki"
+          hostPath:
+            path: "/productionline/munich/packaging/pki"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: packaging
+  namespace: munich
+spec:
+  ports:
+  - name: opcua
+    targetPort: 4840
+    port: 4840
+  selector:
+    app: packaging
