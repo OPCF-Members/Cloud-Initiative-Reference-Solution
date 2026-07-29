@@ -20,6 +20,38 @@ spec:
     spec:
       nodeSelector:
         "kubernetes.io/os": linux
+      initContainers:
+      # Wait for the simulated Modbus device so the Thing Description can be
+      # onboarded successfully on the very first startup pass.
+      - name: wait-for-modbus
+        image: busybox:1.36
+        command: ["/bin/sh", "-c"]
+        args:
+          - |
+            echo "Waiting for modbus-simulator.munich:502 ..."
+            until nc -z -w 2 modbus-simulator.munich 502; do
+              sleep 5
+            done
+            echo "Modbus simulator is up"
+      # Seed the WoT Thing Description into the settings folder. UA Edge Translator
+      # onboards every *.jsonld found there at startup. Copied only when absent so
+      # assets added or edited through the UI are preserved across restarts.
+      - name: seed-thing-descriptions
+        image: busybox:1.36
+        command: ["/bin/sh", "-c"]
+        args:
+          - |
+            if [ ! -f /app/settings/modbus-simulator.jsonld ]; then
+              echo "Seeding WoT Thing Description for the Modbus simulator"
+              cp /seed/modbus-simulator.jsonld /app/settings/modbus-simulator.jsonld
+            else
+              echo "modbus-simulator.jsonld already present; leaving existing asset untouched"
+            fi
+        volumeMounts:
+        - name: "settings"
+          mountPath: "/app/settings"
+        - name: "thing-descriptions"
+          mountPath: "/seed"
       containers:
       - name: ua-edgetranslator
         image: ghcr.io/opcfoundation/ua-edgetranslator:main
@@ -49,6 +81,12 @@ spec:
         - name: "settings"
           hostPath:
             path: "/translator/settings"
+        - name: "thing-descriptions"
+          configMap:
+            name: modbus-thing-description
+            items:
+              - key: modbus-simulator.jsonld
+                path: modbus-simulator.jsonld
         - name: "nodesets"
           hostPath:
             path: "/translator/nodesets"
@@ -122,6 +160,18 @@ spec:
               echo "$station is up"
             done
             echo "Production line 'munich' is ready"
+      # Wait for UA Edge Translator's OPC UA server as well: the persistency file
+      # also subscribes to the Modbus asset it maps into OPC UA.
+      - name: wait-for-edgetranslator
+        image: busybox:1.36
+        command: ["/bin/sh", "-c"]
+        args:
+          - |
+            echo "Waiting for ua-edgetranslator.edge:4840 ..."
+            until nc -z -w 2 ua-edgetranslator.edge 4840; do
+              sleep 5
+            done
+            echo "UA Edge Translator is up"
       # Seed the broker connection / metadata configuration and the published-nodes
       # persistency on first start so the "Configuring the Broker Connection and
       # Metadata" UI steps are not needed and data flows immediately.
@@ -513,6 +563,69 @@ data:
         ],
         "OpcEvents": [],
         "OpcAuthenticationMode": "Anonymous"
+      },
+      {
+        "EndpointUrl": "opc.tcp://ua-edgetranslator.edge.svc.cluster.local:4840",
+        "OpcNodes": [
+          {
+            "Id": "nsu=http://opcfoundation.org/UA/modbus-simulator/;s=Temperature",
+            "OpcSamplingInterval": 500,
+            "OpcPublishingInterval": 1000,
+            "HeartbeatInterval": 0,
+            "SkipFirst": false
+          },
+          {
+            "Id": "nsu=http://opcfoundation.org/UA/modbus-simulator/;s=Pressure",
+            "OpcSamplingInterval": 500,
+            "OpcPublishingInterval": 1000,
+            "HeartbeatInterval": 0,
+            "SkipFirst": false
+          },
+          {
+            "Id": "nsu=http://opcfoundation.org/UA/modbus-simulator/;s=FlowRate",
+            "OpcSamplingInterval": 500,
+            "OpcPublishingInterval": 1000,
+            "HeartbeatInterval": 0,
+            "SkipFirst": false
+          },
+          {
+            "Id": "nsu=http://opcfoundation.org/UA/modbus-simulator/;s=EnergyConsumption",
+            "OpcSamplingInterval": 500,
+            "OpcPublishingInterval": 1000,
+            "HeartbeatInterval": 0,
+            "SkipFirst": false
+          },
+          {
+            "Id": "nsu=http://opcfoundation.org/UA/modbus-simulator/;s=MotorSpeed",
+            "OpcSamplingInterval": 500,
+            "OpcPublishingInterval": 1000,
+            "HeartbeatInterval": 0,
+            "SkipFirst": false
+          },
+          {
+            "Id": "nsu=http://opcfoundation.org/UA/modbus-simulator/;s=MachineState",
+            "OpcSamplingInterval": 500,
+            "OpcPublishingInterval": 1000,
+            "HeartbeatInterval": 0,
+            "SkipFirst": false
+          },
+          {
+            "Id": "nsu=http://opcfoundation.org/UA/modbus-simulator/;s=Running",
+            "OpcSamplingInterval": 500,
+            "OpcPublishingInterval": 1000,
+            "HeartbeatInterval": 0,
+            "SkipFirst": false
+          },
+          {
+            "Id": "nsu=http://opcfoundation.org/UA/modbus-simulator/;s=FaultActive",
+            "OpcSamplingInterval": 500,
+            "OpcPublishingInterval": 1000,
+            "HeartbeatInterval": 0,
+            "SkipFirst": false
+          }
+        ],
+        "OpcEvents": [],
+        "OpcAuthenticationMode": "Anonymous"
       }
     ]
 ---
@@ -862,3 +975,475 @@ spec:
     port: 4840
   selector:
     app: packaging
+---
+# ---------------------------------------------------------------------------
+# Simulated Modbus TCP device ("line conditioning unit") on the Munich line
+#
+# A small, dependency-free Modbus TCP server that exposes a handful of live,
+# continuously changing registers. It demonstrates how UA Edge Translator maps a
+# NON-OPC UA device into OPC UA using a W3C WoT Thing Description (see the
+# 'modbus-thing-description' ConfigMap below).
+#
+# Implemented with the Python standard library only (no pip install), so the
+# stock python:3.12-slim image works on arm64 (Raspberry Pi) and offline.
+#
+# Register map (unit id 1), all values big-endian as per the Modbus standard:
+#   Holding registers (FC3)
+#     0-1  Temperature        float32  degC
+#     2-3  Pressure           float32  bar
+#     4-5  FlowRate           float32  l/min
+#     6-7  EnergyConsumption  float32  kWh (monotonically increasing)
+#     8    MotorSpeed         int16    rpm
+#     9    MachineState       int16    0=stopped 1=running 2=fault
+#   Coils (FC1)
+#     0    Running            bool
+#     1    FaultActive        bool
+# ---------------------------------------------------------------------------
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: modbus-simulator
+  namespace: munich
+data:
+  modbus_server.py: |
+    #!/usr/bin/env python3
+    """Minimal Modbus TCP simulation server (standard library only).
+
+    Supports the read/write function codes needed by UA Edge Translator:
+      1  Read Coils
+      2  Read Discrete Inputs
+      3  Read Holding Registers
+      4  Read Input Registers
+      5  Write Single Coil
+      6  Write Single Register
+     16  Write Multiple Registers
+    """
+    import math
+    import socket
+    import socketserver
+    import struct
+    import threading
+    import time
+
+    HOST = "0.0.0.0"
+    PORT = 502
+    UNIT_ID = 1
+
+    # 16-bit register space and coil space (shared, guarded by a lock)
+    _lock = threading.Lock()
+    holding = [0] * 64
+    coils = [False] * 16
+
+
+    def _set_float(index, value):
+        """Write a float32 into two consecutive registers, big-endian (ABCD)."""
+        hi, lo = struct.unpack(">HH", struct.pack(">f", value))
+        holding[index] = hi
+        holding[index + 1] = lo
+
+
+    def _set_int16(index, value):
+        holding[index] = struct.unpack(">H", struct.pack(">h", int(value)))[0]
+
+
+    def simulate():
+        """Continuously update the register values so the data looks alive."""
+        energy = 0.0
+        t = 0.0
+        while True:
+            t += 1.0
+            # smooth, bounded, obviously-synthetic process values
+            temperature = 55.0 + 12.0 * math.sin(t / 30.0)
+            pressure = 4.2 + 0.8 * math.sin(t / 17.0)
+            flow = 120.0 + 25.0 * math.sin(t / 23.0)
+            speed = 1500 + int(120 * math.sin(t / 11.0))
+            energy += max(0.0, flow) * 0.0005
+
+            # a fault trips briefly whenever pressure crosses the high limit
+            fault = pressure > 4.9
+            running = not fault
+            state = 2 if fault else (1 if running else 0)
+
+            with _lock:
+                _set_float(0, temperature)
+                _set_float(2, pressure)
+                _set_float(4, flow)
+                _set_float(6, energy)
+                _set_int16(8, speed)
+                _set_int16(9, state)
+                coils[0] = running
+                coils[1] = fault
+
+            time.sleep(1.0)
+
+
+    def _read_bits(source, address, count):
+        payload = bytearray()
+        byte_count = (count + 7) // 8
+        payload.append(byte_count)
+        chunk = bytearray(byte_count)
+        for i in range(count):
+            if address + i < len(source) and source[address + i]:
+                chunk[i // 8] |= 1 << (i % 8)
+        payload.extend(chunk)
+        return bytes(payload)
+
+
+    def _read_registers(source, address, count):
+        payload = bytearray()
+        payload.append(count * 2)
+        for i in range(count):
+            value = source[address + i] if address + i < len(source) else 0
+            payload.extend(struct.pack(">H", value))
+        return bytes(payload)
+
+
+    def handle_pdu(pdu):
+        """Return the response PDU for a request PDU (or an exception response)."""
+        function = pdu[0]
+        try:
+            if function in (1, 2):
+                address, count = struct.unpack(">HH", pdu[1:5])
+                with _lock:
+                    return bytes([function]) + _read_bits(coils, address, count)
+
+            if function in (3, 4):
+                address, count = struct.unpack(">HH", pdu[1:5])
+                with _lock:
+                    return bytes([function]) + _read_registers(holding, address, count)
+
+            if function == 5:
+                address, value = struct.unpack(">HH", pdu[1:5])
+                with _lock:
+                    if address < len(coils):
+                        coils[address] = value == 0xFF00
+                return pdu[:5]
+
+            if function == 6:
+                address, value = struct.unpack(">HH", pdu[1:5])
+                with _lock:
+                    if address < len(holding):
+                        holding[address] = value
+                return pdu[:5]
+
+            if function == 16:
+                address, count = struct.unpack(">HH", pdu[1:5])
+                with _lock:
+                    for i in range(count):
+                        offset = 6 + i * 2
+                        if address + i < len(holding):
+                            holding[address + i] = struct.unpack(">H", pdu[offset:offset + 2])[0]
+                return pdu[:1] + struct.pack(">HH", address, count)
+
+            # illegal function
+            return bytes([function | 0x80, 0x01])
+        except Exception:
+            # illegal data address / value
+            return bytes([function | 0x80, 0x02])
+
+
+    class ModbusHandler(socketserver.BaseRequestHandler):
+        def handle(self):
+            self.request.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            while True:
+                header = self._recv_exact(7)
+                if not header:
+                    return
+                transaction, protocol, length, unit = struct.unpack(">HHHB", header)
+                body = self._recv_exact(length - 1)
+                if body is None:
+                    return
+                response = handle_pdu(body)
+                self.request.sendall(
+                    struct.pack(">HHHB", transaction, protocol, len(response) + 1, unit) + response
+                )
+
+        def _recv_exact(self, count):
+            buffer = b""
+            while len(buffer) < count:
+                chunk = self.request.recv(count - len(buffer))
+                if not chunk:
+                    return None
+                buffer += chunk
+            return buffer
+
+
+    class ModbusServer(socketserver.ThreadingTCPServer):
+        allow_reuse_address = True
+        daemon_threads = True
+
+
+    if __name__ == "__main__":
+        threading.Thread(target=simulate, daemon=True).start()
+        print(f"Modbus TCP simulator listening on {HOST}:{PORT} (unit id {UNIT_ID})", flush=True)
+        ModbusServer((HOST, PORT), ModbusHandler).serve_forever()
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: modbus-simulator
+  namespace: munich
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: modbus-simulator
+  template:
+    metadata:
+      labels:
+        app: modbus-simulator
+    spec:
+      nodeSelector:
+        "kubernetes.io/os": linux
+      containers:
+        - name: modbus-simulator
+          image: python:3.12-slim
+          imagePullPolicy: IfNotPresent
+          command: ["python3", "-u", "/app/modbus_server.py"]
+          ports:
+            - containerPort: 502
+              name: modbus
+          volumeMounts:
+            - name: simulator
+              mountPath: /app
+          readinessProbe:
+            tcpSocket:
+              port: modbus
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: modbus
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "250m"
+              memory: "128Mi"
+      volumes:
+        - name: simulator
+          configMap:
+            name: modbus-simulator
+            items:
+              - key: modbus_server.py
+                path: modbus_server.py
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: modbus-simulator
+  namespace: munich
+spec:
+  selector:
+    app: modbus-simulator
+  ports:
+    - name: modbus
+      port: 502
+      targetPort: 502
+---
+# ---------------------------------------------------------------------------
+# W3C WoT Thing Description for the simulated Modbus TCP device
+#
+# UA Edge Translator loads every *.jsonld file it finds in its settings folder
+# at startup and onboards it as an OPC UA asset (one asset per file, named after
+# the file). This TD therefore turns the Modbus simulator into a fully modelled
+# OPC UA node set - without writing any code.
+#
+# 'base' addresses the in-cluster Modbus service; the trailing /1 is the Modbus
+# unit id. Each property's form carries the Modbus binding:
+#   href                        <start register>?quantity=<number of registers>
+#   modv:entity                 HoldingRegister | InputRegister | Coil | DiscreteInput
+#   modv:type                   xsd:float (4 bytes / 2 regs), xsd:short (2 bytes / 1 reg), xsd:boolean
+#   modv:mostSignificantByte    true  => standard big-endian Modbus word order
+#   modv:pollingTime            poll interval in milliseconds
+# ---------------------------------------------------------------------------
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: modbus-thing-description
+  namespace: edge
+data:
+  modbus-simulator.jsonld: |
+    {
+      "@context": [
+        "https://www.w3.org/2022/wot/td/v1.1"
+      ],
+      "@type": [
+        "Thing"
+      ],
+      "id": "urn:modbus-simulator",
+      "name": "modbus-simulator",
+      "title": "Munich Line Conditioning Unit (Modbus TCP simulation)",
+      "description": "Simulated Modbus TCP device on the Munich production line, mapped into OPC UA by UA Edge Translator.",
+      "securityDefinitions": {
+        "nosec_sc": {
+          "scheme": "nosec"
+        }
+      },
+      "security": [
+        "nosec_sc"
+      ],
+      "base": "modbus+tcp://modbus-simulator.munich.svc.cluster.local:502/1",
+      "properties": {
+        "Temperature": {
+          "type": "number",
+          "unit": "degreeCelsius",
+          "description": "Process temperature",
+          "readOnly": true,
+          "observable": true,
+          "forms": [
+            {
+              "href": "0?quantity=2",
+              "op": [
+                "readproperty",
+                "observeproperty"
+              ],
+              "modv:entity": "HoldingRegister",
+              "modv:type": "xsd:float",
+              "modv:mostSignificantByte": true,
+              "modv:pollingTime": 2000
+            }
+          ]
+        },
+        "Pressure": {
+          "type": "number",
+          "unit": "bar",
+          "description": "Process pressure",
+          "readOnly": true,
+          "observable": true,
+          "forms": [
+            {
+              "href": "2?quantity=2",
+              "op": [
+                "readproperty",
+                "observeproperty"
+              ],
+              "modv:entity": "HoldingRegister",
+              "modv:type": "xsd:float",
+              "modv:mostSignificantByte": true,
+              "modv:pollingTime": 2000
+            }
+          ]
+        },
+        "FlowRate": {
+          "type": "number",
+          "unit": "litrePerMinute",
+          "description": "Coolant flow rate",
+          "readOnly": true,
+          "observable": true,
+          "forms": [
+            {
+              "href": "4?quantity=2",
+              "op": [
+                "readproperty",
+                "observeproperty"
+              ],
+              "modv:entity": "HoldingRegister",
+              "modv:type": "xsd:float",
+              "modv:mostSignificantByte": true,
+              "modv:pollingTime": 2000
+            }
+          ]
+        },
+        "EnergyConsumption": {
+          "type": "number",
+          "unit": "kilowattHour",
+          "description": "Cumulative energy consumption",
+          "readOnly": true,
+          "observable": true,
+          "forms": [
+            {
+              "href": "6?quantity=2",
+              "op": [
+                "readproperty",
+                "observeproperty"
+              ],
+              "modv:entity": "HoldingRegister",
+              "modv:type": "xsd:float",
+              "modv:mostSignificantByte": true,
+              "modv:pollingTime": 5000
+            }
+          ]
+        },
+        "MotorSpeed": {
+          "type": "integer",
+          "unit": "revolutionPerMinute",
+          "description": "Motor speed",
+          "readOnly": true,
+          "observable": true,
+          "forms": [
+            {
+              "href": "8?quantity=1",
+              "op": [
+                "readproperty",
+                "observeproperty"
+              ],
+              "modv:entity": "HoldingRegister",
+              "modv:type": "xsd:short",
+              "modv:mostSignificantByte": true,
+              "modv:pollingTime": 2000
+            }
+          ]
+        },
+        "MachineState": {
+          "type": "integer",
+          "description": "Machine state: 0 = stopped, 1 = running, 2 = fault",
+          "readOnly": true,
+          "observable": true,
+          "forms": [
+            {
+              "href": "9?quantity=1",
+              "op": [
+                "readproperty",
+                "observeproperty"
+              ],
+              "modv:entity": "HoldingRegister",
+              "modv:type": "xsd:short",
+              "modv:mostSignificantByte": true,
+              "modv:pollingTime": 2000
+            }
+          ]
+        },
+        "Running": {
+          "type": "boolean",
+          "description": "True while the unit is running",
+          "readOnly": true,
+          "observable": true,
+          "forms": [
+            {
+              "href": "0?quantity=1",
+              "op": [
+                "readproperty",
+                "observeproperty"
+              ],
+              "modv:entity": "Coil",
+              "modv:type": "xsd:boolean",
+              "modv:mostSignificantByte": true,
+              "modv:pollingTime": 2000
+            }
+          ]
+        },
+        "FaultActive": {
+          "type": "boolean",
+          "description": "True while a high-pressure fault is active",
+          "readOnly": true,
+          "observable": true,
+          "forms": [
+            {
+              "href": "1?quantity=1",
+              "op": [
+                "readproperty",
+                "observeproperty"
+              ],
+              "modv:entity": "Coil",
+              "modv:type": "xsd:boolean",
+              "modv:mostSignificantByte": true,
+              "modv:pollingTime": 2000
+            }
+          ]
+        }
+      }
+    }

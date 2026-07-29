@@ -17,6 +17,8 @@ OPC Foundation Cloud Initiative Open-Source Reference Solution
   - [Where Telemetry Data Is Persisted](#where-telemetry-data-is-persisted)
 - [Simulated Production Line](#simulated-production-line)
   - [Data Flows Immediately](#data-flows-immediately)
+  - [Simulated Modbus TCP Device (Non-OPC UA)](#simulated-modbus-tcp-device-non-opc-ua)
+    - [Each Asset Gets Its Own OPC UA Namespace](#each-asset-gets-its-own-opc-ua-namespace)
 - [Automatic Certificate Provisioning (GDS Server Push)](#automatic-certificate-provisioning-gds-server-push)
   - [What Happens](#what-happens)
   - [Using It Manually](#using-it-manually)
@@ -174,6 +176,7 @@ end-to-end pipeline from industrial protocols to a time-series database.
 | **ua-cloudpublisher** | `edge` | `ghcr.io/barnstee/ua-cloudpublisher:main` | **8081 (UI)** |
 | **ua-cloudcommander** | `edge` | `ghcr.io/opcfoundation/ua-cloudcommander:main` | — |
 | **mes**, **assembly**, **test**, **packaging** | `munich` | `ghcr.io/digitaltwinconsortium/manufacturingontologies:main` | 4840 (each) |
+| **modbus-simulator** | `munich` | `python:3.12-slim` | 502 (Modbus TCP) |
 | **mosquitto** | `cloud` | `eclipse-mosquitto:2.0.18` | 8883 (MQTT/TLS) |
 | **telegraf** | `cloud` | `telegraf:1.37-alpine` | — |
 | **influxdb** | `cloud` | `influxdb:2.7` | **8086 (UI/API)** |
@@ -197,6 +200,9 @@ end-to-end pipeline from industrial protocols to a time-series database.
   four OPC UA servers modelling a factory line (MES shift schedule plus assembly,
   test and packaging stations), providing live telemetry out of the box. See
   [Simulated Production Line](#simulated-production-line).
+- **modbus-simulator** — a **simulated Modbus TCP device** on the Munich line,
+  automatically mapped into OPC UA by the Edge Translator via a W3C WoT Thing
+  Description. See [Simulated Modbus TCP Device](#simulated-modbus-tcp-device-non-opc-ua).
 - **mosquitto** — *Eclipse Mosquitto* MQTT broker carrying the OPC UA PubSub `data/#`
   and `metadata` messages. Configured via `mosquitto-conf` with a TLS listener on
   8883 and username/password authentication (`allow_anonymous false`) using the
@@ -226,6 +232,8 @@ end-to-end pipeline from industrial protocols to a time-series database.
 | `telegraf-conf` | ConfigMap | Telegraf configuration (MQTT inputs + InfluxDB output). |
 | `mosquitto-conf` | ConfigMap | Mosquitto broker configuration (TLS listener, authentication, persistence). |
 | `ua-cloudpublisher-settings` | ConfigMap | Seeds the Publisher's `settings.json` (broker connection, topics, metadata) and `persistency.json` (published nodes for the simulated line) on first start. |
+| `modbus-simulator` | ConfigMap | The Python Modbus TCP simulation server run by the simulated device. |
+| `modbus-thing-description` | ConfigMap | W3C WoT Thing Description seeded into UA Edge Translator so the Modbus device is onboarded as an OPC UA asset at startup. |
 | `grafana-datasources`, `grafana-dashboard-provider`, `grafana-dashboards` | ConfigMaps | Provision the InfluxDB data source and the starter dashboard. |
 | `opcua-model-importer` | ConfigMap | Importer script for [loading OPC UA Information Models](#importing-an-opc-ua-information-model-into-influxdb-ua-cloud-library) from the UA Cloud Library. |
 | `portainer-sa-clusteradmin` / `portainer-crb-clusteradmin` | ServiceAccount / ClusterRoleBinding | Grant Portainer in-cluster access to the K3s API server. |
@@ -384,32 +392,132 @@ implements OPC UA methods (e.g. opening a pressure relief valve) that the
 
 UA Cloud Publisher is pre-seeded with a **published-nodes persistency file**
 (`persistency.json`, taken from the Manufacturing Ontologies Munich
-configuration) listing the nodes to subscribe to on each station. Because the
-seeded `settings.json` sets `AutoLoadPersistedNodes: true`, the Publisher loads
-this list on startup and begins publishing OPC UA PubSub messages to Mosquitto
-right away — telemetry appears in InfluxDB and Grafana without any manual
-onboarding.
+configuration) listing the nodes to subscribe to on each station, **plus the
+Modbus variables that UA Edge Translator maps into OPC UA**. Because the seeded
+`settings.json` sets `AutoLoadPersistedNodes: true`, the Publisher loads this
+list on startup and begins publishing OPC UA PubSub messages to Mosquitto right
+away — telemetry appears in InfluxDB and Grafana without any manual onboarding.
 
-To guarantee correct start-up order, the Publisher pod runs a
-**`wait-for-productionline` init container** that blocks until every station is
-accepting OPC UA connections on port 4840:
+To guarantee correct start-up order, the Publisher pod runs two init containers
+that block until their dependencies are accepting OPC UA connections on port 4840:
+**`wait-for-productionline`** (all four stations) and
+**`wait-for-edgetranslator`** (the Edge Translator, which serves the mapped
+Modbus asset):
 
 ```bash
 # watch the simulation come up
 kubectl get pods -n munich -w
 
-# the Publisher stays in Init: until the line is ready
+# the Publisher stays in Init: until the line and the translator are ready
 kubectl get pods -n edge
 kubectl logs -n edge deploy/ua-cloudpublisher -c wait-for-productionline
+kubectl logs -n edge deploy/ua-cloudpublisher -c wait-for-edgetranslator
 ```
 
 Both seeded files are only copied if they are not already present, so any changes
 you later make through the Publisher UI are preserved across restarts.
 
+### Simulated Modbus TCP Device (Non-OPC UA)
+
+The Munich line also includes a **simulated Modbus TCP device** — a "line
+conditioning unit" — to demonstrate the other half of the story: bringing a
+**non-OPC UA** asset into the OPC UA world *without writing any code*.
+
+It is a small, dependency-free Modbus TCP server (Python standard library only,
+so it runs on arm64 and offline) exposing continuously changing registers at
+`modbus-simulator.munich.svc.cluster.local:502`, unit id `1`:
+
+| Register | Address | Modbus type | Value |
+|---|---|---|---|
+| Temperature | Holding 0–1 | float32 | Process temperature (°C) |
+| Pressure | Holding 2–3 | float32 | Process pressure (bar) |
+| FlowRate | Holding 4–5 | float32 | Coolant flow (l/min) |
+| EnergyConsumption | Holding 6–7 | float32 | Cumulative energy (kWh) |
+| MotorSpeed | Holding 8 | int16 | Motor speed (rpm) |
+| MachineState | Holding 9 | int16 | 0 = stopped, 1 = running, 2 = fault |
+| Running | Coil 0 | bool | True while running |
+| FaultActive | Coil 1 | bool | True during a high-pressure fault |
+
+#### Automatic Onboarding via a WoT Thing Description
+
+The device is described by a **W3C WoT Thing Description** shipped in the
+`modbus-thing-description` ConfigMap. UA Edge Translator loads **every `*.jsonld`
+file in its `settings` folder at startup** and onboards it as an OPC UA asset, so
+the Modbus registers appear as browsable, subscribable OPC UA variables on
+`opc.tcp://<device-ip>:4840` with no manual configuration.
+
+The TD carries the Modbus binding on each property's `forms` entry:
+
+```jsonc
+"base": "modbus+tcp://modbus-simulator.munich.svc.cluster.local:502/1",  // trailing /1 = unit id
+"forms": [{
+  "href": "0?quantity=2",              // start register + number of registers
+  "op": ["readproperty", "observeproperty"],
+  "modv:entity": "HoldingRegister",    // HoldingRegister | InputRegister | Coil | DiscreteInput
+  "modv:type": "xsd:float",            // xsd:float (2 regs), xsd:short (1 reg), xsd:boolean, ...
+  "modv:mostSignificantByte": true,    // standard big-endian Modbus word order
+  "modv:pollingTime": 2000             // poll interval in ms
+}]
+```
+
+As with the Publisher, the Edge Translator pod runs two init containers: one
+waits for the Modbus simulator to accept connections, and one seeds the Thing
+Description into `/translator/settings` — **only if it is not already there**, so
+assets you add or edit through the Edge Translator UI survive restarts.
+
+```bash
+# watch the simulator and the translator come up
+kubectl get pods -n munich -l app=modbus-simulator
+kubectl logs -n edge deploy/ua-edgetranslator -c seed-thing-descriptions
+```
+
+#### Each Asset Gets Its Own OPC UA Namespace
+
+UA Edge Translator registers **one OPC UA namespace per onboarded asset**, derived
+from the Thing Description's `name`:
+
+```
+http://opcfoundation.org/UA/<td.name>/
+```
+
+Each mapped property becomes a variable in that namespace with a **string NodeId
+equal to the property name**. So the simulator's registers are addressable as:
+
+| Property | OPC UA NodeId |
+|---|---|
+| Temperature | `nsu=http://opcfoundation.org/UA/modbus-simulator/;s=Temperature` |
+| Pressure | `nsu=http://opcfoundation.org/UA/modbus-simulator/;s=Pressure` |
+| FlowRate | `nsu=http://opcfoundation.org/UA/modbus-simulator/;s=FlowRate` |
+| EnergyConsumption | `nsu=http://opcfoundation.org/UA/modbus-simulator/;s=EnergyConsumption` |
+| MotorSpeed | `nsu=http://opcfoundation.org/UA/modbus-simulator/;s=MotorSpeed` |
+| MachineState | `nsu=http://opcfoundation.org/UA/modbus-simulator/;s=MachineState` |
+| Running | `nsu=http://opcfoundation.org/UA/modbus-simulator/;s=Running` |
+| FaultActive | `nsu=http://opcfoundation.org/UA/modbus-simulator/;s=FaultActive` |
+
+Because each asset is isolated in its own namespace, two devices can expose
+identically-named properties without colliding.
+
+These NodeIds are already listed in the Publisher's seeded `persistency.json`
+against the Edge Translator endpoint
+(`opc.tcp://ua-edgetranslator.edge.svc.cluster.local:4840`), so the **Modbus data
+flows all the way through to InfluxDB and Grafana automatically** — a non-OPC UA
+device published as OPC UA PubSub with zero manual configuration, enabling
+**fully automatic asset onboarding**!
+
+> **Use this as your template.** To onboard a *real* Modbus (or BACnet, S7,
+> Rockwell, OPC DA, …) device, copy this ConfigMap, change `base` to your device's
+> address and edit the register addresses/types — no code, no rebuild. Remember to
+> add the resulting NodeIds (namespace derived from your TD's `name`) to the
+> Publisher if you want the data published. See
+> [Onboarding a Non-OPC UA Device](#onboarding-a-non-opc-ua-device) and the
+> additional examples in the
+> [UA Edge Translator samples](https://github.com/OPCFoundation/UA-EdgeTranslator/tree/main/Samples).
+
 > **Don't want the simulation?** Delete the `munich` namespace
-> (`kubectl delete namespace munich`) and remove the `wait-for-productionline`
-> init container plus the `persistency.json` entries from `edge.yaml`, then
-> onboard your real devices as described in
+> (`kubectl delete namespace munich`) and remove the `wait-for-productionline` /
+> `wait-for-modbus` init containers, the `persistency.json` entries, and the
+> `modbus-thing-description` ConfigMap from `edge.yaml`, then onboard your real
+> devices as described in
 > [Onboarding an OPC UA Device](#onboarding-an-opc-ua-device).
 
 ## Automatic Certificate Provisioning (GDS Server Push)
