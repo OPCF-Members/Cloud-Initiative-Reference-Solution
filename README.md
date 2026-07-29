@@ -4,6 +4,11 @@ OPC Foundation Cloud Initiative Open-Source Reference Solution
 
 ## Table of Contents
 
+- [Why This Solution](#why-this-solution)
+  - [The Problem It Solves](#the-problem-it-solves)
+  - [What You Can Do That You Couldn't Before](#what-you-can-do-that-you-couldnt-before)
+  - [Zero Lock-In by Design](#zero-lock-in-by-design)
+  - [Interoperability Through Open Standards](#interoperability-through-open-standards)
 - [Reference Edge Hardware](#reference-edge-hardware) — see [hardware.md](./hardware.md)
 - [Deploying the Software Stack](#deploying-the-software-stack)
   - [What the Stack Contains](#what-the-stack-contains)
@@ -34,6 +39,95 @@ OPC Foundation Cloud Initiative Open-Source Reference Solution
   - [STRIDE Threat Assessment](#stride-threat-assessment)
   - [Production Hardening Recommendations](#production-hardening-recommendations)
 
+## Why This Solution
+
+Industrial data is trapped. It sits in machines that speak dozens of incompatible
+protocols, behind gateways you don't control, in platforms that charge for
+every tag and make leaving expensive. Connecting a factory for data analytics and AI today
+usually means picking a vendor — and then living with their protocols, their data
+model, their pricing, and their roadmap for decades.
+
+**This reference solution shows there is another way.** It is a complete,
+higly scalable, end-to-end industrial IoT stack — from the sensor on the shop floor to a
+queryable time-series dashboard and back down to a command that actuates a
+machine — built entirely from **open standards** and **open-source components**.
+You can deploy it today, on hardware you own, with no subscription fee.
+
+### The Problem It Solves
+
+| Problem | How this solution addresses it |
+|---|---|
+| **Protocol fragmentation** — every machine speaks something different (Modbus, BACnet, OPC DA/AE, Siemens S7, Rockwell, Beckhoff, Mitsubishi, IEC 61850, OCPP, LoRaWAN, Matter, Redfish, HTTP/REST…) | The **UA Edge Translator** normalises all of them into a single OPC UA information model, using **W3C Web of Things (WoT) Thing Descriptions** as the declarative, vendor-neutral mapping format — no custom code per device. |
+| **Data without meaning** — most IoT pipelines ship anonymous numbers that need out-of-band documentation to interpret | Data flows as **OPC UA PubSub** with accompanying **metadata messages**, so every value arrives with its type, semantics, and source. Full **OPC UA Information Models** can be imported from the **UA Cloud Library** so you know what a machine *could* report, not just what it happens to send. |
+| **Vendor lock-in** — proprietary apps, proprietary payload formats, and egress/ingest pricing that grows with your data | Every component is open source and speaks **standard MQTT** with **standard OPC UA PubSub JSON** payloads. Point it at any broker, any database, any cloud — or keep it entirely on-premises. |
+| **Read-only pipelines** — telemetry goes up, but nothing can come back down safely | **UA Cloud Commander** implements the spec-compliant **OPC UA PubSub Actions** request/response pattern, so cloud or local applications can securely **read, write, call methods, and read history** on shop-floor servers. |
+| **No closed loop** — insights stay in dashboards instead of driving action | **UA Cloud Action** watches the time-series data and automatically triggers OPC UA method calls when thresholds are crossed — a genuine **digital feedback loop**, running at the edge with no cloud dependency. |
+| **Certificate management pain** — OPC UA security is often disabled because provisioning trust is tedious | **GDS Server Push** provisions certificates and trust lists automatically, so the stack runs *secure by default* instead of secure-in-theory. |
+| **Hard to evaluate** — pilots stall because getting *any* data flowing takes days if not weeks | A **simulated production line** ships with the stack. Apply two manifests and real OPC UA telemetry is flowing into dashboards within minutes — no hardware required to start. |
+
+### What You Can Do That You Couldn't Before
+
+- **Connect a brownfield machine without writing code.** Describe it once in a WoT
+  Thing Description and it appears as a fully-modelled OPC UA server.
+- **Move your entire data pipeline between clouds — or off the cloud — in an
+  afternoon.** Because the wire formats are open standards, the broker, database,
+  and dashboards are all replaceable parts, not a platform you're bound to.
+- **Close the loop from analytics back to the machine**, using a standardised,
+  auditable command pattern rather than a bespoke integration.
+- **Build your own applications against a standard REST API.** The OPC UA Web API
+  (OpenAPI-based) lets any language talk to your OPC UA estate over plain HTTP/JSON.
+- **Run the whole thing on a $350 industrial PC** — or scale the same manifests
+  across a fleet, or split them between edge and cloud clusters. Same code, same
+  standards.
+
+### Zero Lock-In by Design
+
+- **100% open source.** Every component — UA Edge Translator, UA Cloud Publisher,
+  UA Cloud Commander, UA Cloud Action, Mosquitto, Telegraf, InfluxDB, Grafana,
+  Portainer — is open source. There are no subscription fees, no per-message
+  costs, no seat counts, and no expiring trials. Fork it, audit it, extend it.
+  > You still own the total cost of ownership: the hardware and
+  > the effort to operate, patch, and support the stack yourself. What you avoid is
+  > recurring licence and consumption billing — and the dependency that comes with it.
+- **Runs anywhere.** It is plain Kubernetes (K3s). Deploy it on a Raspberry Pi in
+  a control cabinet, a rack server in your own data center, or a managed
+  Kubernetes service in any public cloud. The [edge/cloud split](#deploying-the-software-stack)
+  lets you draw the boundary wherever your architecture and data-sovereignty rules
+  require — including fully air-gapped.
+- **Vendor independence.** Nothing here depends on a specific PLC vendor, cloud
+  provider, historian, or dashboard tool. Each box in the pipeline is swappable
+  because the interfaces between them are public specifications, not private APIs.
+- **No proprietary payloads.** What goes over the wire is OPC UA PubSub JSON over
+  MQTT — documented, inspectable, and consumable by anything.
+
+### Interoperability Through Open Standards
+
+Open standards are used *throughout* the stack, not just at the edges:
+
+| Standard | Where it is used |
+|---|---|
+| **OPC UA** (IEC 62541 series) | The information model and the security model for all shop-floor connectivity. |
+| **OPC UA PubSub** (IEC 62541-14) | The telemetry wire format (JSON over MQTT), including metadata messages. |
+| **OPC UA Actions** (IEC 62541-14) | The command & control request/response pattern used by Cloud Commander and Cloud Action. |
+| **OPC UA GDS Server Push** (IEC 62541-12) | Automated certificate and trust-list provisioning. |
+| **OPC UA Web API** (IEC 62541-4, OpenAPI) | The RESTful interface for building custom applications — an OpenAPI representation of the OPC UA Services. |
+| **W3C Web of Things (WoT)** (W3C Recommendation) | Thing Descriptions that declaratively map non-OPC UA assets into OPC UA. |
+| **MQTT 5.0** (OASIS) | The messaging transport, with TLS and authentication. MQTT v5 features (Correlation Data, Response Topic, Message Expiry) carry the request/response correlation for OPC UA Actions. |
+| **Kubernetes** (CNCF) | The deployment and operations model. |
+
+Because these are *published specifications* rather than product features, any
+conforming tool — from any vendor — can participate in this architecture. That is
+the difference between an integration and an ecosystem.
+
+> **Evaluating this for your organisation?** Start with
+> [Deploying the Software Stack](#deploying-the-software-stack): two `kubectl apply`
+> commands bring up the full pipeline plus a
+> [simulated production line](#simulated-production-line), so you can see live data
+> in Grafana before committing any hardware. A
+> [STRIDE security analysis](#security-analysis-stride) and
+> [production hardening guidance](#production-hardening-recommendations) are
+> included to support an enterprise architectural review.
+
 ## Reference Edge Hardware
 
 The reference solution runs on any 64-bit Linux host capable of running K3s.
@@ -58,7 +152,7 @@ OPC UA / industrial protocols, plus a **simulated production line** so the stack
 produces real OPC UA telemetry out of the box (see
 [Simulated Production Line](#simulated-production-line)). The **cloud** part
 contains the broker, storage, visualization, and management components that would
-typically run in a data centre or public cloud.
+typically run in a data center or public cloud.
 
 > **For convenience, everything can be installed on a single K3s instance** 
 > Simply apply both manifests to the same cluster; the two namespaces
@@ -328,7 +422,7 @@ start.
 The seeded UA Cloud Publisher configuration enables the **GDS Server Push**
 feature (`"PushCertsBeforePublishing": true`), which automates this entirely.
 UA Cloud Publisher acts as a lightweight **Global Discovery Server (GDS)** and
-uses the OPC UA *Server Push Configuration* interface (OPC UA Part 12) to
+uses the OPC UA *Server Push Configuration* interface (IEC 62541-12) to
 provision certificates into each OPC UA server it is about to publish from.
 
 ### What Happens
@@ -630,7 +724,7 @@ application can remotely **read, write, call methods on, and historically read**
 OPC UA nodes on the edge — all over the same Mosquitto broker.
 
 Cloud Commander implements the OPC UA PubSub **Actions** request/response pattern
-(OPC 10000-14). It acts as the **Responder**: it subscribes to the `commands/#`
+(IEC 62541-14). It acts as the **Responder**: it subscribes to the `commands/#`
 topic, executes the requested OPC UA operation against an on-premises OPC UA
 server (e.g. the Edge Translator at `opc.tcp://<device-ip>:4840`), and publishes
 the result to the `responses` topic.
@@ -747,7 +841,7 @@ broker, and Cloud Commander.
 In addition to the MQTT-based feedback loop, **UA Cloud Action** exposes an
 **OPC UA Web API** — a RESTful, [OpenAPI](https://swagger.io/specification/)-based
 HTTP interface to the standard OPC UA services defined in
-[OPC UA Part 4](https://reference.opcfoundation.org/Core/Part4/v105/docs/). This
+[IEC 62541-4](https://reference.opcfoundation.org/Core/Part4/v105/docs/). This
 lets you build **custom applications** — dashboards, mobile apps, analytics jobs,
 or backend integrations — that talk to the edge's OPC UA servers over plain
 HTTP/JSON, without embedding a native OPC UA stack.
