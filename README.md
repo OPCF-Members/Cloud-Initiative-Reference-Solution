@@ -1062,9 +1062,9 @@ and what to change before an internet-exposed or production deployment.
 [Field devices] --(OPC UA / Modbus / LoRaWAN / OCPP / HTTP)--> [UA Edge Translator]
 [Simulated line: mes/assembly/test/packaging (OPC UA :4840)]            |
 [Modbus simulator (Modbus TCP :502, no auth)] --------------------------+
-      |                                                                |
-      |  Boundary A: device <-> edge                                   | (OPC UA server :4840)
-      v                                                                v
+      |                                                                 |
+      |  Boundary A: device <-> edge                                    | (OPC UA server :4840)
+      v                                                                 v
 [UA Cloud Publisher] --(MQTT/TLS :8883, user/pass)--> [Mosquitto] --(MQTT/TLS)--> [Telegraf] --(HTTP + token)--> [InfluxDB]
       ^                                                  ^   ^                                                        ^   ^
       |                            [UA Cloud Commander] -+   |  (commands/responses)                                  |   |
