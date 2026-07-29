@@ -9,10 +9,12 @@ OPC Foundation Cloud Initiative Open-Source Reference Solution
   - [What You Can Do That You Couldn't Before](#what-you-can-do-that-you-couldnt-before)
   - [Zero Lock-In by Design](#zero-lock-in-by-design)
   - [Interoperability Through Open Standards](#interoperability-through-open-standards)
-- [Reference Edge Hardware](#reference-edge-hardware) — see [hardware.md](./hardware.md)
+- [Reference Edge Hardware](#reference-edge-hardware)
 - [Deploying the Software Stack](#deploying-the-software-stack)
   - [What the Stack Contains](#what-the-stack-contains)
   - [Install K3s on the Pi](#install-k3s-on-the-pi)
+    - [Prerequisite: enable memory cgroups (Raspberry Pi only)](#prerequisite-enable-memory-cgroups-raspberry-pi-only)
+    - [Install](#install)
   - [Apply the Stack Manifests](#apply-the-stack-manifests)
   - [Where Telemetry Data Is Persisted](#where-telemetry-data-is-persisted)
 - [Simulated Production Line](#simulated-production-line)
@@ -252,10 +254,23 @@ Data flow:
 > Change these and use certificates from a trusted CA before any production or
 > exposed deployment.
 
-### Install K3s on the Pi
+### Install K3s
 
-Once the device has booted and been updated, install K3s (SSH into the device
-first):
+#### Prerequisite: enable memory cgroups (Raspberry Pi only)
+
+Raspberry Pi OS ships with the **memory cgroup controller disabled**, but
+K3s/containerd requires it. Enable it and reboot **before** installing K3s:
+
+```bash
+# NOTE: cmdline.txt must stay a SINGLE line - append, don't add a new line.
+sudo sed -i '1 s/$/ cgroup_memory=1 cgroup_enable=memory/' /boot/firmware/cmdline.txt
+
+# On Raspberry Pi OS older than Bookworm the file is /boot/cmdline.txt instead.
+
+sudo reboot now
+```
+
+Once the device has booted and been updated, install K3s
 
 ```bash
 # Install a single-node K3s cluster (server + agent on the same node)
