@@ -13,14 +13,15 @@
 #   export UACLOUDLIB_USERNAME="myUser"
 #   export UACLOUDLIB_PASSWORD="myPass"
 #   export UACLOUDLIB_MODEL_ID="1627266626"   # e.g. the Station nodeset
-#   kubectl delete job import-opcua-model --ignore-not-found
+#   kubectl delete job import-opcua-model -n cloud --ignore-not-found
 #   envsubst < import-opcua-model.yaml | kubectl apply -f -
-#   kubectl logs -f job/import-opcua-model
+#   kubectl logs -f job/import-opcua-model -n cloud
 ---
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: opcua-model-importer
+  namespace: cloud
 data:
   import_model.py: |
     #!/usr/bin/env python3
@@ -42,7 +43,7 @@ data:
     user = os.environ.get("UACLOUDLIB_USERNAME", "")
     password = os.environ.get("UACLOUDLIB_PASSWORD", "")
 
-    influx_url = os.environ.get("INFLUX_URL", "http://influxdb.default.svc.cluster.local:8086").rstrip("/")
+    influx_url = os.environ.get("INFLUX_URL", "http://influxdb.cloud.svc.cluster.local:8086").rstrip("/")
     org = os.environ.get("INFLUX_ORG", "iot")
     bucket = os.environ.get("INFLUX_BUCKET", "mqtt")
     token = os.environ["INFLUX_TOKEN"]
@@ -128,6 +129,7 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: import-opcua-model
+  namespace: cloud
 spec:
   backoffLimit: 2
   ttlSecondsAfterFinished: 3600
@@ -154,7 +156,7 @@ spec:
               value: "${UACLOUDLIB_PASSWORD}"
             # InfluxDB target (token reused from the existing influxdb-auth Secret)
             - name: INFLUX_URL
-              value: "http://influxdb.default.svc.cluster.local:8086"
+              value: "http://influxdb.cloud.svc.cluster.local:8086"
             - name: INFLUX_ORG
               value: "iot"
             - name: INFLUX_BUCKET

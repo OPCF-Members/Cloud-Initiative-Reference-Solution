@@ -4,15 +4,11 @@ OPC Foundation Cloud Initiative Open-Source Reference Solution
 
 ## Table of Contents
 
-- [Reference Edge Hardware](#reference-edge-hardware)
-  - [Bill of Materials (Purchasing)](#bill-of-materials-purchasing)
-  - [Software Installation (Imaging the SSD)](#software-installation-imaging-the-ssd)
-  - [Hardware Installation](#hardware-installation)
-    - [First-Boot Configuration](#first-boot-configuration)
-- [Deploying the IoT Stack](#deploying-the-iot-stack)
+- [Reference Edge Hardware](#reference-edge-hardware) — see [hardware.md](./hardware.md)
+- [Deploying the Software Stack](#deploying-the-software-stack)
   - [What the Stack Contains](#what-the-stack-contains)
   - [Install K3s on the Pi](#install-k3s-on-the-pi)
-  - [Apply the Stack Manifest](#apply-the-stack-manifest)
+  - [Apply the Stack Manifests](#apply-the-stack-manifests)
   - [Where Telemetry Data Is Persisted](#where-telemetry-data-is-persisted)
 - [Accessing the Web UIs](#accessing-the-web-uis)
 - [Managing the Cluster with Portainer](#managing-the-cluster-with-portainer)
@@ -35,84 +31,39 @@ OPC Foundation Cloud Initiative Open-Source Reference Solution
 
 ## Reference Edge Hardware
 
-The reference solution is validated on a compact, fanless industrial PC built
-around the Raspberry Pi Compute Module 5 (CM5). This platform provides an
-industrial-grade, DIN-rail-mountable edge gateway suitable for running the
-OPC Foundation Cloud Initiative open-source reference workloads.
+The reference solution runs on any 64-bit Linux host capable of running K3s.
+For a validated, industrial-grade edge gateway we **recommend** a fanless
+Raspberry Pi Compute Module 5 (CM5) industrial PC — see
+**[hardware.md](./hardware.md)** for the recommended bill of materials, SSD
+imaging, assembly, and first-boot instructions.
 
-<img src="CM5.png" alt="Waveshare IPCBox-CM5" width="25%" />
+## Deploying the Software Stack
 
-### Bill of Materials (Purchasing)
+The reference workload is split into two manifests that run on a lightweight
+Kubernetes cluster (**K3s**):
 
-Purchase the following components from Waveshare as a complete kit:
+| Manifest | Namespace | Components |
+|----------|-----------|------------|
+| [`edge.yaml`](./edge.yaml) | `edge` | UA Edge Translator, UA Cloud Publisher, UA Cloud Commander |
+| [`cloud.yaml`](./cloud.yaml) | `cloud` | Mosquitto, Telegraf, InfluxDB, Grafana, Portainer, UA Cloud Action |
 
-| # | Component | Description | Product Page |
-|---|-----------|-------------|--------------|
-| 1 | **IPCBox-CM5-A** | Industrial computer / enclosure kit for the Raspberry Pi Compute Module 5 (aluminum-alloy passive-cooling case, carrier board, dual Gigabit Ethernet, USB, dual HDMI, M.2 M-Key NVMe slot, wide-voltage DC input, RTC). | <https://www.waveshare.com/ipcbox-cm5-a.htm> |
-| 2 | **Raspberry Pi Compute Module 5** | The system-on-module (BCM2712 quad-core Cortex-A76). Select a variant **without eMMC** (not needed), a minimum of 8GB RAM and optionally WiFi to match your needs. | <https://www.waveshare.com/compute-module-5.htm> |
-| 3 | **SK NVMe 2242 128G SSD (M.2)** | 128 GB M.2 2242 NVMe SSD used for the operating system and application data storage. | <https://www.waveshare.com/sk-nvme-2242-128g-ssd-m.2.htm> |
-| 4 | **USB-to-M.2 (NVMe) adapter / enclosure** | A USB 3.x adapter that accepts an **M-Key M.2 NVMe** SSD (2242 compatible). Used to connect the SSD to a separate PC so it can be imaged with Raspberry Pi Imager before final assembly. | <https://www.waveshare.com/usb-to-sata.htm> |
+The **edge** part contains the components that sit next to the machines and speak
+OPC UA / industrial protocols. The **cloud** part contains the broker, storage,
+visualization, and management components that would typically run in a data
+centre or public cloud.
 
-### Software Installation (Imaging the SSD)
-
-The operating system is written to the NVMe SSD from a **separate PC** using the
-USB-to-M.2 adapter and Raspberry Pi Imager. Do this before assembling the unit.
-
-1. **Insert the SSD into the USB-to-M.2 adapter.** Seat the SK NVMe 2242 128G SSD
-   in the adapter's M-Key slot and secure it, then plug the adapter into a USB 3.x
-   port on your PC. The drive should enumerate as a USB mass-storage device.
-2. **Install Raspberry Pi Imager** on the PC from <https://www.raspberrypi.com/software/> and launch it.
-3. **Select Device:** Pick **Raspberry Pi 5**.
-4. **Select OS:** Click **Raspberry Pi OS (other)** and pick **Raspberry Pi OS Lite (64-bit)**.
-5. **Select Storage:** Pick the SK NVMe SSD presented through the USB-to-M.2 adapter.
-   > ⚠️ Double-check you are selecting the SSD and not another drive on your PC —
-   > imaging is destructive and erases the selected device.
-6. **Customization:** Set the **hostname**, **username/password**, **Wi‑Fi** (if used), **locale/timezone**,
-   and enable **SSH** on the Services tab. This allows a fully headless first boot.
-7. **Writing:** Click **WRITE** and wait for Imager to write and verify the image.
-8. **Finish:** Close the imager, eject the adapter, remove the SSD, and proceed to the
-   [Hardware Installation](#hardware-installation) to assemble the device.
-
-### Hardware Installation
-
-> **Image the SSD first.** Complete the [Software Installation](#software-installation-imaging-the-ssd)
-> steps below to write Raspberry Pi OS onto the NVMe SSD using the USB-to-M.2
-> adapter **before** installing the SSD into the enclosure. 
-
-Follow the instructions in the [Assembly Guide](https://docs.waveshare.com/IPCBOX-CM5-A/Assembly-Guide).
-> ⚠️ If you bought the CM5 with WiFi, don't forget to plug the antenna cable into the CM5 board before assembly!
-
-#### First-Boot Configuration
-
-1. Power on the assembled device and log in (via the HDMI/keyboard console or over
-   SSH using the hostname/credentials configured during imaging):
-   ```bash
-   ssh <username>@<hostname>.local
-   ```
-2. Update the system:
-   ```bash
-   sudo apt update && sudo apt full-upgrade -y
-   ```
-3. Verify the NVMe SSD is the active root device and the CM5 memory is detected:
-   ```bash
-   lsblk
-   free -h
-   ```
-4. Confirm network connectivity on the built-in Gigabit Ethernet:
-   ```bash
-   ip addr
-   ping -c3 opcfoundation.org
-   ```
-
-## Deploying the IoT Stack
-
-The reference workload is defined in [`iot-stack.yaml`](./iot-stack.yaml) and runs
-on a lightweight single-node Kubernetes cluster (**K3s**) on the CM5.
+> **For convenience, everything can be installed on a single K3s instance** 
+> Simply apply both manifests to the same cluster; the two namespaces
+> keep the edge and cloud workloads logically separated while they share one node.
+> In a distributed deployment, apply `edge.yaml` to the edge cluster and
+> `cloud.yaml` to the cloud cluster, and update the cross-namespace service DNS
+> names (see *Apply the Stack Manifests*) to point at the remote endpoints.
 
 ### What the Stack Contains
 
-`iot-stack.yaml` deploys the following components, forming an end-to-end pipeline
-from industrial protocols to a time-series database:
+Together, `edge.yaml` and `cloud.yaml` deploy the following components, forming an
+end-to-end pipeline from industrial protocols to a time-series database (see the
+table above for which manifest/namespace each component belongs to):
 
 | Component | Image | Role | Ports |
 |-----------|-------|------|-------|
@@ -134,7 +85,7 @@ Data flow:
 ![Reference solution architecture and data flow](./arch.png)
 
 > **Security note:** you choose the credentials at deployment time via the
-> `IOT_USERNAME` / `IOT_PASSWORD` variables (see *Apply the Stack Manifest*),
+> `IOT_USERNAME` / `IOT_PASSWORD` variables (see *Apply the Stack Manifests*),
 > used consistently across the Edge Translator,
 > Cloud Publisher, Cloud Commander, Mosquitto, and InfluxDB for demo purposes.
 > Mosquitto uses a
@@ -171,12 +122,12 @@ kubectl get nodes
 > **ServiceLB (klipper-lb)** load balancer, so the `type: LoadBalancer`
 > Services in the manifest are reachable directly on the node's IP address.
 
-### Apply the Stack Manifest
+### Apply the Stack Manifests
 
-1. Copy `iot-stack.yaml` onto the device (e.g. with `git clone`, `scp`, or by
-   pasting it into a file opened via a text editor like nano).
-2. Provide the deployment credentials and InfluxDB token. The manifest
-   references `${IOT_USERNAME}`, `${IOT_PASSWORD}`, and `${INFLUX_TOKEN}`, so set
+1. Copy `edge.yaml` and `cloud.yaml` onto the device (e.g. with `git clone`, `scp`, or by
+   pasting them into files opened via a text editor like nano).
+2. Provide the deployment credentials and InfluxDB token. The manifests
+   reference `${IOT_USERNAME}`, `${IOT_PASSWORD}`, and `${INFLUX_TOKEN}`, so set
    them and substitute them at apply time:
 
    ```bash
@@ -192,7 +143,9 @@ kubectl get nodes
    # Substitute ONLY these variables and apply. Restricting the variable list is
    # important so envsubst does not touch the runtime shell variables (e.g.
    # $MOSQUITTO_USERNAME) used inside the container start-up commands.
-   envsubst '${IOT_USERNAME} ${IOT_PASSWORD} ${INFLUX_TOKEN}' < iot-stack.yaml | kubectl apply -f -
+   # Apply the cloud part first so the broker and database exist for the edge part.
+   envsubst '${IOT_USERNAME} ${IOT_PASSWORD} ${INFLUX_TOKEN}' < cloud.yaml | kubectl apply -f -
+   envsubst '${IOT_USERNAME} ${IOT_PASSWORD} ${INFLUX_TOKEN}' < edge.yaml  | kubectl apply -f -
    ```
 
    > `envsubst` is part of the `gettext` package (`sudo apt install -y gettext-base`).
@@ -200,11 +153,20 @@ kubectl get nodes
    > log into the web UIs and the broker, and the generated `INFLUX_TOKEN` to
    > authenticate Telegraf and log into InfluxDB via the API.
 
-3. Watch the workloads come up:
+   > **Deploying edge and cloud on separate clusters?** The manifests reference each
+   > other by in-cluster DNS (`mosquitto.cloud.svc.cluster.local`,
+   > `influxdb.cloud.svc.cluster.local`, and
+   > `ua-edgetranslator.edge.svc.cluster.local`). If the two halves run in different
+   > clusters, replace those names with the externally reachable addresses of the
+   > remote services before applying.
+
+3. Watch the workloads come up (each part lives in its own namespace):
 
    ```bash
-   kubectl get pods -w
-   kubectl get svc
+   kubectl get pods,svc -n cloud
+   kubectl get pods,svc -n edge
+   # or watch everything at once
+   kubectl get pods -A -w
    ```
 
    All pods should reach `Running`/`Ready`, and each `LoadBalancer` Service should
@@ -247,7 +209,7 @@ Replace `<device-ip>` with the CM5's IP address (from `ip addr` or
 | Service | URL | Notes |
 |---------|-----|-------|
 | **UA Edge Translator** | `http://<device-ip>:8080` | Configure southbound asset connections and the OPC UA information model. Log in with the `IOT_USERNAME` / `IOT_PASSWORD` you set (exposed via the manifest `OPCUA_USERNAME` / `OPCUA_PASSWORD` env vars). |
-| **UA Cloud Publisher** | `http://<device-ip>:8081` | Configure which OPC UA nodes to publish and the MQTT broker target (`mosquitto.default.svc.cluster.local:8883`, TLS). Log in with the `IOT_USERNAME` / `IOT_PASSWORD` you set (exposed via the manifest `PUBLISHER_USERNAME` / `PUBLISHER_PASSWORD` env vars). |
+| **UA Cloud Publisher** | `http://<device-ip>:8081` | Configure which OPC UA nodes to publish and the MQTT broker target (`mosquitto.cloud.svc.cluster.local:8883`, TLS). Log in with the `IOT_USERNAME` / `IOT_PASSWORD` you set (exposed via the manifest `PUBLISHER_USERNAME` / `PUBLISHER_PASSWORD` env vars). |
 | **InfluxDB** | `http://<device-ip>:8086` | Time-series UI, Data Explorer, and dashboards. Log in with the `IOT_USERNAME` / `IOT_PASSWORD` you set (org `iot`, bucket `mqtt`). |
 | **Portainer** | `https://<device-ip>:9443` | Kubernetes management UI for the K3s cluster. On first access you set the admin password (see *Managing the Cluster with Portainer*). |
 | **Grafana** | `http://<device-ip>:3000` | Dashboards & alerting. Log in with the `IOT_USERNAME` / `IOT_PASSWORD` you set. The InfluxDB data source and a starter dashboard are pre-provisioned (see *Dashboards with Grafana*). |
@@ -260,7 +222,7 @@ To keep both UIs reachable on the single node,
 
 **Portainer CE** provides a web UI to inspect and manage everything running on the
 single-node K3s cluster (deployments, pods, logs, container shells, events, and
-volumes). It is deployed by `iot-stack.yaml` and is pre-wired to manage the
+volumes). It is deployed by `cloud.yaml` and is pre-wired to manage the
 cluster it runs in — no manual endpoint configuration is required.
 
 How the K3s connection works:
@@ -278,7 +240,7 @@ First-time setup:
    warning) within a few minutes of the pod starting.
    > For security, Portainer disables initial admin creation if you don't complete
    > it shortly after startup. If you see a timeout message, restart the pod:
-   > `kubectl rollout restart deployment/portainer`.
+   > `kubectl rollout restart deployment/portainer -n cloud`.
 2. Create the **admin** user and password.
 3. On the environments page, select the **local Kubernetes** environment (already
    connected via the in-cluster ServiceAccount) and click **Live connect**.
@@ -390,14 +352,14 @@ join(tables: {d: data, m: meta}, on: ["datasetWriterId"], method: "inner")
 
 ## Dashboards with Grafana
 
-**Grafana** is deployed by `iot-stack.yaml` as an alternative to InfluxDB's
+**Grafana** is deployed by `cloud.yaml` as an alternative to InfluxDB's
 built-in dashboards, with richer visualization, templating, and alerting. It comes
 **pre-provisioned** so no manual setup is needed beyond logging in.
 
 What the manifest provisions automatically:
 
 - **InfluxDB data source** (`grafana-datasources` ConfigMap) — points at
-  `http://influxdb.default.svc.cluster.local:8086` using the **Flux** query
+  `http://influxdb.cloud.svc.cluster.local:8086` using the **Flux** query
   language, org `iot`, and default bucket `mqtt`. The query token is injected from
   the `influxdb-auth` Secret via the `INFLUX_TOKEN` environment variable
   (interpolated into the provisioned data source at startup).
@@ -458,9 +420,9 @@ Steps:
    export UACLOUDLIB_USERNAME="myUser"
    export UACLOUDLIB_PASSWORD="myPass"
    export UACLOUDLIB_MODEL_ID="1627266626"
-   kubectl delete job import-opcua-model --ignore-not-found
+   kubectl delete job import-opcua-model -n cloud --ignore-not-found
    envsubst < import-opcua-model.yaml | kubectl apply -f -
-   kubectl logs -f job/import-opcua-model
+   kubectl logs -f job/import-opcua-model -n cloud
    ```
 
    The log prints how many variables were imported.
@@ -493,12 +455,12 @@ the result to the `responses` topic.
 
 ### How It Is Configured
 
-`ua-cloudcommander` is deployed by `iot-stack.yaml` and connects to Mosquitto via
+`ua-cloudcommander` is deployed by `cloud.yaml` and connects to Mosquitto via
 these environment variables (no web UI — it is configured entirely through env):
 
 | Variable | Value | Purpose |
 |----------|-------|---------|
-| `BROKERNAME` | `mosquitto.default.svc.cluster.local` | In-cluster Mosquitto Service. |
+| `BROKERNAME` | `mosquitto.cloud.svc.cluster.local` | In-cluster Mosquitto Service. |
 | `BROKERPORT` | `8883` | TLS MQTT port. |
 | `USE_TLS` | `true` | Mosquitto requires TLS. |
 | `CLIENTNAME` | `UACloudCommander` | MQTT client id / Responder `PublisherId`. |
@@ -566,13 +528,13 @@ publishes a `ua-action-request` (a `MethodCall`) to the `commands` topic — whi
 Cloud Commander executes on the target OPC UA server. This closes an edge-local
 **digital feedback loop** entirely on the Pi.
 
-In this reference stack it is deployed (`iot-stack.yaml`) to read from **InfluxDB**
+In this reference stack it is deployed (`cloud.yaml`) to read from **InfluxDB**
 and drive Commander over Mosquitto:
 
 | Variable | Value | Purpose |
 |----------|-------|---------|
 | `DATA_SOURCE` | `InfluxDB` | Use InfluxDB as the trigger source (instead of Azure Data Explorer). |
-| `INFLUX_URL` | `http://influxdb.default.svc.cluster.local:8086` | InfluxDB endpoint. |
+| `INFLUX_URL` | `http://influxdb.cloud.svc.cluster.local:8086` | InfluxDB endpoint. |
 | `INFLUX_ORG` / `INFLUX_BUCKET` | `iot` / `mqtt` | Org and bucket to query. |
 | `INFLUX_MEASUREMENT` | `opcua_pubsub` | Measurement to query. |
 | `INFLUX_FIELD` | `Payload_Pressure_Value` | **Numeric field to evaluate — change to match your assets.** |
@@ -643,11 +605,11 @@ http://<device-ip>:8082
 - **The API is rate limited** per client IP using a fixed window. The limit and
   window are configurable via the `RATE_LIMIT_PERMIT` and
   `RATE_LIMIT_WINDOW_SECONDS` environment variables (defaulting to **60 requests
-  per 60 seconds** in `iot-stack.yaml`). Requests exceeding the limit receive
+  per 60 seconds** in `cloud.yaml`). Requests exceeding the limit receive
   `429 Too Many Requests`.
 - Behind the OPC UA Web API, UA Cloud Action forwards the requested service to the
   target OPC UA server (e.g. the Edge Translator at
-  `opc.tcp://ua-edgetranslator.default.svc.cluster.local:4840`).
+  `opc.tcp://ua-edgetranslator.edge.svc.cluster.local:4840`).
 
 ### Building Custom Apps with the Starter Kit
 

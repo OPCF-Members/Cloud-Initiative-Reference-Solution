@@ -1,0 +1,301 @@
+﻿apiVersion: v1
+kind: Namespace
+metadata:
+  name: edge
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ua-edgetranslator
+  namespace: edge
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ua-edgetranslator
+  template:
+    metadata:
+      labels:
+        app: ua-edgetranslator
+    spec:
+      nodeSelector:
+        "kubernetes.io/os": linux
+      containers:
+      - name: ua-edgetranslator
+        image: ghcr.io/opcfoundation/ua-edgetranslator:main
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: OPCUA_USERNAME
+          value: "${IOT_USERNAME}"
+        - name: OPCUA_PASSWORD
+          value: "${IOT_PASSWORD}"
+        ports:
+        - containerPort: 4840
+        - containerPort: 5000
+        - containerPort: 5001
+        - containerPort: 19520
+        - containerPort: 19521
+        - containerPort: 8080
+        volumeMounts:
+        - name: "settings"
+          mountPath: "/app/settings"
+        - name: "nodesets"
+          mountPath: "/app/nodesets"
+        - name: "pki"
+          mountPath: "/app/pki"
+        - name: "logs"
+          mountPath: "/app/logs"
+      volumes:
+        - name: "settings"
+          hostPath:
+            path: "/translator/settings"
+        - name: "nodesets"
+          hostPath:
+            path: "/translator/nodesets"
+        - name: "pki"
+          hostPath:
+            path: "/translator/pki"
+        - name: "logs"
+          hostPath:
+            path: "/translator/logs"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ua-edgetranslator
+  namespace: edge
+spec:
+  type: LoadBalancer
+  ports:
+  - name: opcua
+    targetPort: 4840
+    port: 4840
+  - name: lorawan
+    targetPort: 5000
+    port: 5000
+  - name: securelorawan
+    targetPort: 5001
+    port: 5001
+  - name: ocpp
+    targetPort: 19520
+    port: 19520
+  - name: secureocpp
+    targetPort: 19521
+    port: 19521
+  - name: http
+    targetPort: 8080
+    port: 8080
+  selector:
+    app: ua-edgetranslator
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ua-cloudpublisher
+  namespace: edge
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ua-cloudpublisher
+  template:
+    metadata:
+      labels:
+        app: ua-cloudpublisher
+    spec:
+      nodeSelector:
+        "kubernetes.io/os": linux
+      initContainers:
+      # Seed the broker connection / metadata configuration on first start so the
+      # "Configuring the Broker Connection and Metadata" UI steps are not needed.
+      # The file is only copied if the operator has not already saved settings,
+      # so any later changes made through the UI are preserved.
+      - name: seed-settings
+        image: busybox:1.36
+        command: ["/bin/sh", "-c"]
+        args:
+          - |
+            if [ ! -f /app/settings/settings.json ]; then
+              echo "Seeding default UA Cloud Publisher settings.json"
+              cp /seed/settings.json /app/settings/settings.json
+            else
+              echo "settings.json already present; leaving existing configuration untouched"
+            fi
+        volumeMounts:
+        - name: "settings"
+          mountPath: "/app/settings"
+        - name: "settings-seed"
+          mountPath: "/seed"
+      containers:
+      - name: ua-cloudpublisher
+        image: ghcr.io/barnstee/ua-cloudpublisher:main
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: PUBLISHER_USERNAME
+          value: "${IOT_USERNAME}"
+        - name: PUBLISHER_PASSWORD
+          value: "${IOT_PASSWORD}"
+        - name: OPCUA_USERNAME
+          value: "${IOT_USERNAME}"
+        - name: OPCUA_PASSWORD
+          value: "${IOT_PASSWORD}"
+        ports:
+        - containerPort: 8080
+        volumeMounts:
+        - name: "settings"
+          mountPath: "/app/settings"
+        - name: "pki"
+          mountPath: "/app/pki"
+        - name: "logs"
+          mountPath: "/app/logs"
+        - name: "store"
+          mountPath: "/app/store"
+      volumes:
+        - name: "settings"
+          hostPath:
+            path: "/publisher/settings"
+        - name: "settings-seed"
+          configMap:
+            name: ua-cloudpublisher-settings
+            items:
+              - key: settings.json
+                path: settings.json
+        - name: "pki"
+          hostPath:
+            path: "/publisher/pki"
+        - name: "logs"
+          hostPath:
+            path: "/publisher/logs"
+        - name: "store"
+          hostPath:
+            path: "/publisher/store"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ua-cloudpublisher-settings
+  namespace: edge
+data:
+  # Pre-populated UA Cloud Publisher configuration that points the publisher at
+  # the in-cluster Mosquitto broker (TLS, 8883) and enables OPC UA metadata
+  # messages. Credentials are substituted from ${IOT_USERNAME}/${IOT_PASSWORD}
+  # at apply time (envsubst), matching the rest of the stack.
+  settings.json: |
+    {
+      "PublisherName": "UACloudPublisher",
+      "BrokerUrl": "mosquitto.cloud.svc.cluster.local",
+      "BrokerPort": 8883,
+      "BrokerUsername": "${IOT_USERNAME}",
+      "BrokerPassword": "${IOT_PASSWORD}",
+      "BrokerMessageTopic": "data",
+      "BrokerMetadataTopic": "metadata",
+      "SendUAMetadata": true,
+      "UseTLS": true,
+      "UseKafka": false,
+      "CreateBrokerSASToken": false,
+      "UseUACertAuth": false,
+      "UseCustomCertAuth": false,
+      "UseAltBrokerForMetadata": false,
+      "AltBrokerUrl": null,
+      "AltBrokerPort": 8883,
+      "AltBrokerUsername": null,
+      "AltBrokerPassword": null,
+      "SendUAStatus": false,
+      "SendUAConnection": true,
+      "SendDiagnosticsMessages": true,
+      "MetadataSendInterval": 300,
+      "BrokerCommandTopic": null,
+      "BrokerDataReceivedTopic": null,
+      "BrokerResponseTopic": null,
+      "BrokerMessageSize": 262144,
+      "UseReverseConnect": false,
+      "AutoPublishAllWoTProperties": true,
+      "PushCertsBeforePublishing": true,
+      "InternalQueueCapacity": 1000,
+      "DefaultSendIntervalSeconds": 1,
+      "DiagnosticsLoggingInterval": 30,
+      "DefaultOpcSamplingInterval": 500,
+      "DefaultOpcPublishingInterval": 1000,
+      "UAStackTraceMask": 645,
+      "ReversiblePubSubEncoding": false,
+      "OmitNetworkMessageHeader": true,
+      "UseCloudEventsMetadataHeader": false,
+      "AutoLoadPersistedNodes": true,
+      "AzureOpenAIAPIEndpoint": null,
+      "AzureOpenAIAPIKey": null,
+      "AzureOpenAIDeploymentName": null
+    }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ua-cloudpublisher
+  namespace: edge
+spec:
+  type: LoadBalancer
+  ports:
+  - name: http
+    targetPort: 8080
+    port: 8081
+  selector:
+    app: ua-cloudpublisher
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ua-cloudcommander
+  namespace: edge
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ua-cloudcommander
+  template:
+    metadata:
+      labels:
+        app: ua-cloudcommander
+    spec:
+      nodeSelector:
+        "kubernetes.io/os": linux
+      containers:
+      - name: ua-cloudcommander
+        image: ghcr.io/opcfoundation/ua-cloudcommander:main
+        imagePullPolicy: IfNotPresent
+        env:
+        # Broker connection (Mosquitto, TLS MQTT on 8883 with username/password auth)
+        - name: BROKERNAME
+          value: "mosquitto.cloud.svc.cluster.local"
+        - name: BROKERPORT
+          value: "8883"
+        - name: USE_TLS
+          value: "true"
+        - name: CLIENTNAME
+          value: "UACloudCommander"
+        # Topic to subscribe to for incoming ua-action-request messages
+        - name: TOPIC
+          value: "commands/#"
+        # Default topic to publish ua-action-response messages to
+        - name: RESPONSE_TOPIC
+          value: "responses"
+        # Broker credentials (same IOT_USERNAME / IOT_PASSWORD used across the stack)
+        - name: USERNAME
+          value: "${IOT_USERNAME}"
+        - name: PASSWORD
+          value: "${IOT_PASSWORD}"
+        # Credentials used to connect to the target OPC UA servers (e.g. the Edge Translator)
+        - name: UA_USERNAME
+          value: "${IOT_USERNAME}"
+        - name: UA_PASSWORD
+          value: "${IOT_PASSWORD}"
+        volumeMounts:
+        - name: "pki"
+          mountPath: "/app/pki"
+        - name: "logs"
+          mountPath: "/app/logs"
+      volumes:
+        - name: "pki"
+          hostPath:
+            path: "/commander/pki"
+        - name: "logs"
+          hostPath:
+            path: "/commander/logs"

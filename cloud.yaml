@@ -1,0 +1,872 @@
+﻿apiVersion: v1
+kind: Namespace
+metadata:
+  name: cloud
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: influxdb-auth
+  namespace: cloud
+type: Opaque
+stringData:
+  INFLUX_TOKEN: "${INFLUX_TOKEN}"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: telegraf-conf
+  namespace: cloud
+data:
+  telegraf.conf: |
+    [global_tags]
+      env = "dev"
+
+    [agent]
+      interval = "1s"
+      round_interval = true
+      metric_batch_size = 200
+      metric_buffer_limit = 2000
+      collection_jitter = "0s"
+      flush_interval = "1s"
+      flush_jitter = "0s"
+      logfile = ""
+      omit_hostname = false
+
+    ##################################################################################
+    # MQTT â†’ consume OPC UA PubSub JSON data messages and parse it on ingest (json_v2)
+    ##################################################################################
+    [[inputs.mqtt_consumer]]
+      servers = ["ssl://mosquitto.cloud.svc.cluster.local:8883"]
+      topics  = ["data/#"]
+      qos     = 1
+      client_id = "telegraf-mqtt-data"
+      username = "${IOT_USERNAME}"
+      password = "${IOT_PASSWORD}"
+      insecure_skip_verify = true
+      connection_timeout = "30s"
+      persistent_session = false
+
+      # Keep the MQTT topic as a tag (useful for filtering/debugging)
+      topic_tag = "mqtt_topic"
+
+      # Parse payload as json_v2
+      data_format = "json_v2"
+
+      [[inputs.mqtt_consumer.json_v2]]
+        # Measurement name for parsed points
+        measurement_name = "opcua_pubsub"
+
+        # Top-level PublisherId -> tag "publisher"
+        [[inputs.mqtt_consumer.json_v2.tag]]
+          path     = "PublisherId"
+          rename   = "publisher"
+          optional = false
+
+        # OPTIONAL: top-level MessageId as tag
+        [[inputs.mqtt_consumer.json_v2.tag]]
+          path     = "MessageId"
+          rename   = "messageId"
+          optional = true
+
+        # Parse the array Messages[] into one metric per element
+        [[inputs.mqtt_consumer.json_v2.object]]
+          path = "Messages"
+
+          # Use inner timestamp as point time (_time)  âœ…
+          timestamp_key    = "Timestamp"
+          timestamp_format = "2006-01-02T15:04:05.999999999Z07:00"
+
+          # Keep nested prefixes so you get fields like Payload_ConnectedToBroker_Value
+          disable_prepend_keys = false
+
+          # Include DataSetWriterId as a TAG âœ…
+          tags = ["DataSetWriterId"]
+
+          [inputs.mqtt_consumer.json_v2.object.renames]
+            DataSetWriterId = "datasetWriterId"
+
+    ###########################################################################
+    # UA-METADATA messages (ua-metadata)
+    #
+    # One message describes metadata for a given DataSetWriterId.
+    # We'll store it as measurement "opcua_metadata".
+    #
+    # We:
+    #   - use top-level Timestamp as _time via timestamp_path
+    #   - keep PublisherId + DataSetWriterId as tags
+    #   - extract MetaData.Name and first Field details (Fields[0].*)
+    ###########################################################################
+    [[inputs.mqtt_consumer]]
+      servers = ["ssl://mosquitto.cloud.svc.cluster.local:8883"]
+      topics  = ["metadata"]
+      qos     = 1
+      client_id = "telegraf-mqtt-metadata"
+      username = "${IOT_USERNAME}"
+      password = "${IOT_PASSWORD}"
+      insecure_skip_verify = true
+      connection_timeout = "30s"
+      persistent_session = false
+      topic_tag = "mqtt_topic"
+
+      data_format = "json_v2"
+
+      [[inputs.mqtt_consumer.json_v2]]
+        measurement_name = "opcua_metadata"
+
+        # Use the inner Timestamp as point time (_time)
+        timestamp_path    = "Timestamp"
+        timestamp_format  = "2006-01-02T15:04:05.999999999Z07:00"
+
+        # Tags
+        [[inputs.mqtt_consumer.json_v2.tag]]
+          path     = "PublisherId"
+          rename   = "publisher"
+          optional = false
+
+        [[inputs.mqtt_consumer.json_v2.tag]]
+          path     = "DataSetWriterId"
+          rename   = "datasetWriterId"
+          optional = false
+
+        [[inputs.mqtt_consumer.json_v2.tag]]
+          path     = "MessageId"
+          rename   = "messageId"
+          optional = true
+
+        # Metadata name (this can be long; tag is convenient for filtering,
+        # but if you worry about cardinality, switch this to a field below.)
+        [[inputs.mqtt_consumer.json_v2.tag]]
+          path     = "MetaData.Name"
+          rename   = "metaName"
+          optional = true
+
+        # Fields[0] information (first field in the metadata Fields array)
+        [[inputs.mqtt_consumer.json_v2.tag]]
+          path     = "MetaData.Fields.0.Name"
+          rename   = "fieldName"
+          optional = true
+
+        [[inputs.mqtt_consumer.json_v2.tag]]
+          path     = "MetaData.Fields.0.Description"
+          rename   = "fieldDescription"
+          optional = true
+
+        # Store these as numeric fields
+        [[inputs.mqtt_consumer.json_v2.field]]
+          path     = "MetaData.Fields.0.BuiltInType"
+          rename   = "builtInType"
+          type     = "int"
+          optional = true
+
+        [[inputs.mqtt_consumer.json_v2.field]]
+          path     = "MetaData.Fields.0.DataType.Id"
+          rename   = "dataTypeId"
+          type     = "int"
+          optional = true
+
+        [[inputs.mqtt_consumer.json_v2.field]]
+          path     = "MetaData.Fields.0.ValueRank"
+          rename   = "valueRank"
+          type     = "int"
+          optional = true
+
+        [[inputs.mqtt_consumer.json_v2.field]]
+          path     = "MetaData.Fields.0.FieldFlags"
+          rename   = "fieldFlags"
+          type     = "int"
+          optional = true
+
+        # ConfigurationVersion (useful for detecting schema changes)
+        [[inputs.mqtt_consumer.json_v2.field]]
+          path     = "MetaData.ConfigurationVersion.MajorVersion"
+          rename   = "cfgMajor"
+          type     = "int"
+          optional = true
+
+        [[inputs.mqtt_consumer.json_v2.field]]
+          path     = "MetaData.ConfigurationVersion.MinorVersion"
+          rename   = "cfgMinor"
+          type     = "int"
+          optional = true
+
+    ###########################################################################
+    # Output â†’ InfluxDB v2
+    ###########################################################################
+    [[outputs.influxdb_v2]]
+      urls = ["http://influxdb.cloud.svc.cluster.local:8086"]
+      token = "$INFLUX_TOKEN"
+      organization = "iot"
+      bucket = "mqtt"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mosquitto-conf
+  namespace: cloud
+data:
+  mosquitto.conf: |
+    pid_file /mosquitto/mosquitto.pid
+    persistence true
+    persistence_location /mosquitto/data/
+    log_dest stdout
+    allow_anonymous false
+    password_file /mosquitto/data/passwd
+    listener 8883
+    cafile /mosquitto/certs/ca.crt
+    certfile /mosquitto/certs/server.crt
+    keyfile /mosquitto/certs/server.key
+    # TLS + username/password authentication are enabled. For production,
+    # replace the self-signed certificates with ones from a trusted CA.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mosquitto
+  namespace: cloud
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mosquitto
+  template:
+    metadata:
+      labels:
+        app: mosquitto
+    spec:
+      initContainers:
+        - name: gen-certs
+          image: alpine/openssl:latest
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              cd /certs
+              # Self-signed CA
+              openssl req -new -x509 -days 3650 -nodes \
+                -subj "/CN=Mosquitto Demo CA" \
+                -keyout ca.key -out ca.crt
+              # Server key + CSR
+              openssl genrsa -out server.key 2048
+              openssl req -new -key server.key \
+                -subj "/CN=mosquitto.cloud.svc.cluster.local" \
+                -out server.csr
+              # Sign the server cert with SANs for in-cluster and local access
+              printf "subjectAltName=DNS:mosquitto,DNS:mosquitto.cloud,DNS:mosquitto.cloud.svc,DNS:mosquitto.cloud.svc.cluster.local,DNS:localhost,IP:127.0.0.1\n" > san.cnf
+              openssl x509 -req -in server.csr -CA ca.crt -CAkey ca.key \
+                -CAcreateserial -days 3650 -out server.crt -extfile san.cnf
+              chmod 644 ca.crt server.crt server.key
+          volumeMounts:
+            - name: mosquitto-certs
+              mountPath: /certs
+      containers:
+        - name: mosquitto
+          image: eclipse-mosquitto:2.0.18
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: MOSQUITTO_USERNAME
+              value: "${IOT_USERNAME}"
+            - name: MOSQUITTO_PASSWORD
+              value: "${IOT_PASSWORD}"
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              mosquitto_passwd -b -c /mosquitto/data/passwd "$MOSQUITTO_USERNAME" "$MOSQUITTO_PASSWORD"
+              exec /usr/sbin/mosquitto -c /mosquitto/config/mosquitto.conf
+          ports:
+            - containerPort: 8883
+              name: mqtts
+          volumeMounts:
+            - name: mosquitto-conf
+              mountPath: /mosquitto/config
+            - name: mosquitto-data
+              mountPath: /mosquitto/data
+            - name: mosquitto-certs
+              mountPath: /mosquitto/certs
+          livenessProbe:
+            tcpSocket:
+              port: mqtts
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            tcpSocket:
+              port: mqtts
+            initialDelaySeconds: 5
+            periodSeconds: 10
+      volumes:
+        - name: mosquitto-conf
+          configMap:
+            name: mosquitto-conf
+            items:
+              - key: mosquitto.conf
+                path: mosquitto.conf
+        - name: mosquitto-data
+          hostPath:
+            path: "/mosquitto"
+        - name: mosquitto-certs
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mosquitto
+  namespace: cloud
+spec:
+  type: LoadBalancer
+  selector:
+    app: mosquitto
+  ports:
+    - name: mqtts
+      port: 8883
+      targetPort: 8883
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: influxdb
+  namespace: cloud
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: influxdb
+  template:
+    metadata:
+      labels:
+        app: influxdb
+    spec:
+      containers:
+        - name: influxdb
+          image: influxdb:2.7
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8086
+              name: http
+          env:
+            # Optional first-run setup via env vars (if not using the UI)
+            - name: INFLUXD_REPORTING_DISABLED
+              value: "true"
+            - name: DOCKER_INFLUXDB_INIT_MODE
+              value: "setup"
+            - name: DOCKER_INFLUXDB_INIT_USERNAME
+              value: "${IOT_USERNAME}"
+            - name: DOCKER_INFLUXDB_INIT_PASSWORD
+              value: "${IOT_PASSWORD}"
+            - name: DOCKER_INFLUXDB_INIT_ORG
+              value: "iot"
+            - name: DOCKER_INFLUXDB_INIT_BUCKET
+              value: "mqtt"
+            - name: DOCKER_INFLUXDB_INIT_ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: influxdb-auth
+                  key: INFLUX_TOKEN
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/influxdb2
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+      volumes:
+        - name: "data"
+          hostPath:
+            path: "/influxdb2"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: influxdb
+  namespace: cloud
+spec:
+  type: LoadBalancer
+  selector:
+    app: influxdb
+  ports:
+    - name: http
+      port: 8086
+      targetPort: 8086
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: telegraf
+  namespace: cloud
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: telegraf
+  template:
+    metadata:
+      labels:
+        app: telegraf
+    spec:
+      containers:
+        - name: telegraf
+          image: telegraf:1.37-alpine
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: INFLUX_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: influxdb-auth
+                  key: INFLUX_TOKEN
+          volumeMounts:
+            - name: telegraf-conf
+              mountPath: /etc/telegraf
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+          livenessProbe:
+            exec:
+              command: ["/bin/sh", "-c", "pgrep telegraf >/dev/null || exit 1"]
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          readinessProbe:
+            exec:
+              command: ["/bin/sh", "-c", "telegraf --version >/dev/null 2>&1"]
+            initialDelaySeconds: 5
+            periodSeconds: 20
+      volumes:
+        - name: telegraf-conf
+          configMap:
+            name: telegraf-conf
+            items:
+              - key: telegraf.conf
+                path: telegraf.conf
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: portainer-sa-clusteradmin
+  namespace: cloud
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: portainer-crb-clusteradmin
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+subjects:
+- kind: ServiceAccount
+  name: portainer-sa-clusteradmin
+  namespace: cloud
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: portainer
+  namespace: cloud
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: portainer
+  template:
+    metadata:
+      labels:
+        app: portainer
+    spec:
+      nodeSelector:
+        "kubernetes.io/os": linux
+      # Grants Portainer in-cluster access to the K3s API server to manage the cluster
+      serviceAccountName: portainer-sa-clusteradmin
+      containers:
+      - name: portainer
+        image: portainer/portainer-ce:2.21.4
+        imagePullPolicy: IfNotPresent
+        args:
+        # Use the in-cluster (Kubernetes) environment as the default endpoint
+        - "--tunnel-port=8000"
+        ports:
+        - name: http
+          containerPort: 9000
+        - name: https
+          containerPort: 9443
+        - name: tunnel
+          containerPort: 8000
+        volumeMounts:
+        - name: data
+          mountPath: /data
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 9443
+            scheme: HTTPS
+          initialDelaySeconds: 20
+          periodSeconds: 20
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 9443
+            scheme: HTTPS
+          initialDelaySeconds: 10
+          periodSeconds: 20
+      volumes:
+        - name: data
+          hostPath:
+            path: "/portainer"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: portainer
+  namespace: cloud
+spec:
+  type: LoadBalancer
+  selector:
+    app: portainer
+  ports:
+    - name: https
+      port: 9443
+      targetPort: 9443
+    - name: http
+      port: 9000
+      targetPort: 9000
+    - name: tunnel
+      port: 8000
+      targetPort: 8000
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-datasources
+  namespace: cloud
+data:
+  datasource.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: InfluxDB
+        type: influxdb
+        access: proxy
+        url: http://influxdb.cloud.svc.cluster.local:8086
+        isDefault: true
+        jsonData:
+          version: Flux
+          organization: iot
+          defaultBucket: mqtt
+          tlsSkipVerify: true
+        secureJsonData:
+          # Interpolated from the INFLUX_TOKEN environment variable at startup
+          token: $INFLUX_TOKEN
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-provider
+  namespace: cloud
+data:
+  provider.yaml: |
+    apiVersion: 1
+    providers:
+      - name: default
+        orgId: 1
+        folder: ""
+        type: file
+        disableDeletion: false
+        editable: true
+        options:
+          path: /var/lib/grafana/dashboards
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboards
+  namespace: cloud
+data:
+  opcua-overview.json: |
+    {
+      "annotations": { "list": [] },
+      "editable": true,
+      "graphTooltip": 0,
+      "schemaVersion": 39,
+      "title": "OPC UA Telemetry Overview",
+      "uid": "opcua-overview",
+      "tags": ["opcua", "iot"],
+      "time": { "from": "now-1h", "to": "now" },
+      "refresh": "10s",
+      "templating": {
+        "list": [
+          {
+            "name": "publisher",
+            "label": "Publisher",
+            "type": "query",
+            "datasource": { "type": "influxdb", "uid": "influxdb" },
+            "includeAll": true,
+            "multi": true,
+            "query": "import \"influxdata/influxdb/schema\"\nschema.tagValues(bucket: \"mqtt\", tag: \"publisher\")"
+          }
+        ]
+      },
+      "panels": [
+        {
+          "id": 1,
+          "title": "opcua_pubsub values",
+          "type": "timeseries",
+          "datasource": { "type": "influxdb", "uid": "influxdb" },
+          "gridPos": { "h": 10, "w": 24, "x": 0, "y": 0 },
+          "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "showPoints": "never" } }, "overrides": [] },
+          "targets": [
+            {
+              "refId": "A",
+              "query": "from(bucket: \"mqtt\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"opcua_pubsub\")\n  |> filter(fn: (r) => contains(value: r.publisher, set: ${publisher:json}))\n  |> filter(fn: (r) => r._value =~ /^-?[0-9.]+$/ or exists r._value)\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)"
+            }
+          ]
+        },
+        {
+          "id": 2,
+          "title": "Ingest rate (points/sec)",
+          "type": "stat",
+          "datasource": { "type": "influxdb", "uid": "influxdb" },
+          "gridPos": { "h": 6, "w": 12, "x": 0, "y": 10 },
+          "targets": [
+            {
+              "refId": "A",
+              "query": "from(bucket: \"mqtt\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"opcua_pubsub\")\n  |> aggregateWindow(every: 1s, fn: count, createEmpty: false)\n  |> mean()"
+            }
+          ]
+        },
+        {
+          "id": 3,
+          "title": "Active dataset writers",
+          "type": "stat",
+          "datasource": { "type": "influxdb", "uid": "influxdb" },
+          "gridPos": { "h": 6, "w": 12, "x": 12, "y": 10 },
+          "targets": [
+            {
+              "refId": "A",
+              "query": "import \"influxdata/influxdb/schema\"\nschema.tagValues(bucket: \"mqtt\", tag: \"datasetWriterId\")\n  |> count()"
+            }
+          ]
+        }
+      ]
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  namespace: cloud
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: grafana
+  template:
+    metadata:
+      labels:
+        app: grafana
+    spec:
+      nodeSelector:
+        "kubernetes.io/os": linux
+      securityContext:
+        fsGroup: 472
+      initContainers:
+        # Ensure the hostPath data dir is writable by the grafana user (uid/gid 472)
+        - name: init-chown-data
+          image: busybox:1.36
+          command: ["sh", "-c", "chown -R 472:472 /var/lib/grafana"]
+          securityContext:
+            runAsUser: 0
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/grafana
+      containers:
+        - name: grafana
+          image: grafana/grafana:11.2.0
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: GF_SECURITY_ADMIN_USER
+              value: "${IOT_USERNAME}"
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              value: "${IOT_PASSWORD}"
+            # Consumed by the provisioned datasource (token interpolation)
+            - name: INFLUX_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: influxdb-auth
+                  key: INFLUX_TOKEN
+          ports:
+            - name: http
+              containerPort: 3000
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/grafana
+            - name: datasources
+              mountPath: /etc/grafana/provisioning/datasources
+            - name: dashboard-provider
+              mountPath: /etc/grafana/provisioning/dashboards
+            - name: dashboards
+              mountPath: /var/lib/grafana/dashboards
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+      volumes:
+        - name: data
+          hostPath:
+            path: "/grafana"
+        - name: datasources
+          configMap:
+            name: grafana-datasources
+        - name: dashboard-provider
+          configMap:
+            name: grafana-dashboard-provider
+        - name: dashboards
+          configMap:
+            name: grafana-dashboards
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+  namespace: cloud
+spec:
+  type: LoadBalancer
+  selector:
+    app: grafana
+  ports:
+    - name: http
+      port: 3000
+      targetPort: 3000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ua-cloudaction
+  namespace: cloud
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ua-cloudaction
+  template:
+    metadata:
+      labels:
+        app: ua-cloudaction
+    spec:
+      nodeSelector:
+        "kubernetes.io/os": linux
+      containers:
+      - name: ua-cloudaction
+        image: ghcr.io/opcfoundation/ua-cloudaction:main
+        imagePullPolicy: IfNotPresent
+        env:
+        # --- Web UI / OPC UA Web API login ---
+        - name: ADMIN_USERNAME
+          value: "${IOT_USERNAME}"
+        - name: ADMIN_PASSWORD
+          value: "${IOT_PASSWORD}"
+        - name: ASPNETCORE_URLS
+          value: "http://+:8080"
+        # --- OPC UA Web API rate limiter (per client IP, fixed window) ---
+        - name: RATE_LIMIT_PERMIT
+          value: "60"
+        - name: RATE_LIMIT_WINDOW_SECONDS
+          value: "60"
+        # --- Data source: query InfluxDB instead of Azure Data Explorer ---
+        - name: DATA_SOURCE
+          value: "InfluxDB"
+        - name: INFLUX_URL
+          value: "http://influxdb.cloud.svc.cluster.local:8086"
+        - name: INFLUX_ORG
+          value: "iot"
+        - name: INFLUX_BUCKET
+          value: "mqtt"
+        - name: INFLUX_MEASUREMENT
+          value: "opcua_pubsub"
+        # Field to evaluate and threshold that triggers the OPC UA method call.
+        # Adjust INFLUX_FIELD to match a numeric field your assets publish.
+        - name: INFLUX_FIELD
+          value: "Payload_Pressure_Value"
+        - name: INFLUX_THRESHOLD
+          value: "4000"
+        - name: INFLUX_RANGE
+          value: "-1m"
+        - name: INFLUX_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: influxdb-auth
+              key: INFLUX_TOKEN
+        # --- Transport: reach UA Cloud Commander over the Mosquitto MQTT broker ---
+        - name: MESSAGING_PLATFORM
+          value: "MQTT"
+        # Send the full OPC UA PubSub ActionRequest envelope to UA Cloud Commander (not the AIO RPC body)
+        - name: MQTT_TARGET
+          value: "UACloudCommander"
+        - name: BROKER_NAME
+          value: "mosquitto.cloud.svc.cluster.local"
+        - name: MQTT_PORT
+          value: "8883"
+        - name: MQTT_USE_TLS
+          value: "true"
+        # Mosquitto uses a self-signed certificate; skip verification (matches Telegraf's insecure_skip_verify)
+        - name: MQTT_TLS_INSECURE
+          value: "true"
+        - name: BROKER_USERNAME
+          value: "${IOT_USERNAME}"
+        - name: BROKER_PASSWORD
+          value: "${IOT_PASSWORD}"
+        # Topics UA Cloud Commander listens/responds on (it subscribes to commands/#, replies on responses)
+        - name: TOPIC
+          value: "commands"
+        - name: RESPONSE_TOPIC
+          value: "responses"
+        - name: UA_CLOUD_COMMANDER_ID
+          value: "UACloudCommander"
+        - name: REQUESTOR_ID
+          value: "UACloudAction"
+        # --- OPC UA method to invoke on high value (target server reachable by UA Cloud Commander) ---
+        - name: UA_SERVER_ENDPOINT
+          value: "opc.tcp://ua-edgetranslator.edge.svc.cluster.local:4840"
+        - name: UA_SERVER_METHOD_ID
+          value: "ns=2;i=435"
+        - name: UA_SERVER_OBJECT_ID
+          value: "ns=2;i=424"
+        - name: UA_SERVER_APPLICATION_NAME
+          value: "assembly"
+        - name: UA_SERVER_LOCATION_NAME
+          value: "seattle"
+        ports:
+        - containerPort: 8080
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ua-cloudaction
+  namespace: cloud
+spec:
+  type: LoadBalancer
+  selector:
+    app: ua-cloudaction
+  ports:
+    - name: http
+      port: 8082
+      targetPort: 8080
