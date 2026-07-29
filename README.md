@@ -70,24 +70,71 @@ typically run in a data centre or public cloud.
 ### What the Stack Contains
 
 Together, `edge.yaml` and `cloud.yaml` deploy the following components, forming an
-end-to-end pipeline from industrial protocols to a time-series database (see the
-table above for which manifest/namespace each component belongs to):
+end-to-end pipeline from industrial protocols to a time-series database.
 
-| Component | Image | Role | Ports |
-|-----------|-------|------|-------|
-| **ua-edgetranslator** | `ghcr.io/opcfoundation/ua-edgetranslator:main` | OPC Foundation **UA Edge Translator** — connects to southbound assets and translates protocols (LoRaWAN, OCPP, etc.) into an OPC UA information model. Exposes a web UI for configuration. | 4840 (OPC UA server), 5000/5001 (LoRaWAN), 19520/19521 (OCPP), **8080 (web UI)** |
-| **ua-cloudpublisher** | `ghcr.io/barnstee/ua-cloudpublisher:main` | **UA Cloud Publisher** — subscribes to OPC UA data (from the edge translator) and publishes it as **OPC UA PubSub** JSON messages to the MQTT broker. Exposes a web UI for configuration. | **8081 (web UI)** |
-| **ua-cloudcommander** | `ghcr.io/opcfoundation/ua-cloudcommander:main` | OPC Foundation **UA Cloud Commander** — the command & control **Responder**. Subscribes to the Mosquitto `commands/#` topic for `ua-action-request` messages, executes OPC UA operations (Read, HistoricalRead, Write, MethodCall) against on-premises OPC UA servers (e.g. the Edge Translator), and publishes `ua-action-response` messages back to the `responses` topic. Has no web UI. | — |
-| **mes / assembly / test / packaging** | `ghcr.io/digitaltwinconsortium/manufacturingontologies:main` | **Simulated production line "Munich"** — four OPC UA servers modelling a factory line (MES shift schedule plus assembly, test and packaging stations). Provides live OPC UA telemetry so the stack has data flowing immediately. | 4840 (OPC UA server, each) |
-| **mosquitto** | `eclipse-mosquitto:2.0.18` | **Eclipse Mosquitto** MQTT broker that carries the OPC UA PubSub `data/#` and `metadata` messages between the publisher and Telegraf. Configured via `mosquitto-conf` (TLS + authentication required with the `IOT_USERNAME` / `IOT_PASSWORD` credentials supplied at apply time, exposed to the broker via the `MOSQUITTO_USERNAME` / `MOSQUITTO_PASSWORD` env vars, TLS listener on 8883). | 8883 (MQTT/TLS) |
-| **telegraf** | `telegraf:1.37-alpine` | **Telegraf** agent that consumes the MQTT PubSub messages, parses them with the `json_v2` parser (defined in the `telegraf-conf` ConfigMap), and writes them into InfluxDB. Measurements: `opcua_pubsub` (data) and `opcua_metadata` (metadata). | — |
-| **influxdb** | `influxdb:2.7` | **InfluxDB 2.7** time-series database that stores the ingested telemetry. Initialized with org `iot`, bucket `mqtt`, and admin user set to your `IOT_USERNAME`. Exposes a web UI (Data Explorer / dashboards). | **8086 (web UI/API)** |
-| **grafana** | `grafana/grafana:11.2.0` | **Grafana** — dashboarding & alerting UI with a **pre-provisioned InfluxDB data source** (Flux, org `iot`, bucket `mqtt`) and a **starter dashboard** ("OPC UA Telemetry Overview"). | **3000 (web UI)** |
-| **ua-cloudaction** | `ghcr.io/opcfoundation/ua-cloudaction:main` | OPC Foundation **UA Cloud Action** — the command & control **Requestor**. Polls a configured **InfluxDB** field and, when it crosses a threshold, publishes a `ua-action-request` (MethodCall) to the Mosquitto `commands` topic for UA Cloud Commander to execute, closing the digital feedback loop. Has a status web UI and implements the OPC UA Web API for app access. | **8082 (web UI)** |
-| **portainer** | `portainer/portainer-ce:2.21.4` | **Portainer CE** — web UI to manage the single-node K3s cluster (workloads, logs, shells, events). Runs with a `cluster-admin`-bound ServiceAccount so it manages the cluster in-cluster via the K3s API server. | **9443 (HTTPS UI)**, 9000 (HTTP UI), 8000 (edge tunnel) |
-| **influxdb-auth** (Secret) | — | Holds the `INFLUX_TOKEN` used by InfluxDB (admin token), Telegraf (write token), Grafana (query token), and UA Cloud Action (query token). Provided at deploy time via the `${INFLUX_TOKEN}` variable. | — |
-| **telegraf-conf** / **mosquitto-conf** (ConfigMaps) | — | Configuration for Telegraf (MQTT inputs + InfluxDB output) and Mosquitto respectively. | — |
-| **ua-cloudpublisher-settings** (ConfigMap) | — | Pre-populated `settings.json` seeded into the UA Cloud Publisher on first start (broker connection, topics, and OPC UA metadata), so no manual broker configuration is required. | — |
+**Workloads**
+
+| Component | Namespace | Image | Ports |
+|---|---|---|---|
+| **ua-edgetranslator** | `edge` | `ghcr.io/opcfoundation/ua-edgetranslator:main` | 4840, 5000/5001, 19520/19521, **8080 (UI)** |
+| **ua-cloudpublisher** | `edge` | `ghcr.io/barnstee/ua-cloudpublisher:main` | **8081 (UI)** |
+| **ua-cloudcommander** | `edge` | `ghcr.io/opcfoundation/ua-cloudcommander:main` | — |
+| **mes**, **assembly**, **test**, **packaging** | `munich` | `ghcr.io/digitaltwinconsortium/manufacturingontologies:main` | 4840 (each) |
+| **mosquitto** | `cloud` | `eclipse-mosquitto:2.0.18` | 8883 (MQTT/TLS) |
+| **telegraf** | `cloud` | `telegraf:1.37-alpine` | — |
+| **influxdb** | `cloud` | `influxdb:2.7` | **8086 (UI/API)** |
+| **grafana** | `cloud` | `grafana/grafana:11.2.0` | **3000 (UI)** |
+| **ua-cloudaction** | `cloud` | `ghcr.io/opcfoundation/ua-cloudaction:main` | **8082 (UI/Web API)** |
+| **portainer** | `cloud` | `portainer/portainer-ce:2.21.4` | **9443 (HTTPS UI)**, 9000, 8000 |
+
+**What each component does**
+
+- **ua-edgetranslator** — OPC Foundation *UA Edge Translator*. Connects to
+  southbound assets and translates protocols (LoRaWAN, OCPP, etc.) into an OPC UA
+  information model. Exposes a web UI for configuration.
+- **ua-cloudpublisher** — *UA Cloud Publisher*. Subscribes to OPC UA data (from the
+  Edge Translator or the simulated line) and publishes it as **OPC UA PubSub** JSON
+  messages to the MQTT broker. Exposes a web UI for configuration.
+- **ua-cloudcommander** — OPC Foundation *UA Cloud Commander*, the command & control
+  **Responder**. Subscribes to `commands/#` for `ua-action-request` messages,
+  executes OPC UA operations (Read, HistoricalRead, Write, MethodCall) against
+  on-premises OPC UA servers, and replies on the `responses` topic. No web UI.
+- **mes / assembly / test / packaging** — the **simulated production line "Munich"**:
+  four OPC UA servers modelling a factory line (MES shift schedule plus assembly,
+  test and packaging stations), providing live telemetry out of the box. See
+  [Simulated Production Line](#simulated-production-line).
+- **mosquitto** — *Eclipse Mosquitto* MQTT broker carrying the OPC UA PubSub `data/#`
+  and `metadata` messages. Configured via `mosquitto-conf` with a TLS listener on
+  8883 and username/password authentication (`allow_anonymous false`) using the
+  `IOT_USERNAME` / `IOT_PASSWORD` supplied at apply time.
+- **telegraf** — *Telegraf* agent that consumes the MQTT PubSub messages, parses them
+  with the `json_v2` parser (from the `telegraf-conf` ConfigMap), and writes them to
+  InfluxDB as the `opcua_pubsub` (data) and `opcua_metadata` (metadata) measurements.
+- **influxdb** — *InfluxDB 2.7* time-series database storing the telemetry.
+  Initialized with org `iot`, bucket `mqtt`, and an admin user set to your
+  `IOT_USERNAME`. Includes a web UI (Data Explorer / dashboards).
+- **grafana** — *Grafana* dashboarding & alerting UI with a **pre-provisioned
+  InfluxDB data source** (Flux, org `iot`, bucket `mqtt`) and a **starter dashboard**
+  ("OPC UA Telemetry Overview").
+- **ua-cloudaction** — OPC Foundation *UA Cloud Action*, the command & control
+  **Requestor**. Polls a configured InfluxDB field and, when it crosses a threshold,
+  publishes a `ua-action-request` (MethodCall) to the `commands` topic for Cloud
+  Commander to execute — closing the digital feedback loop. Also hosts a status web
+  UI and the [OPC UA Web API](#accessing-the-opc-ua-web-api-ua-cloud-action).
+- **portainer** — *Portainer CE*, a web UI to manage the K3s cluster (workloads,
+  logs, shells, events). Runs under a `cluster-admin`-bound ServiceAccount.
+
+**Configuration resources**
+
+| Resource | Kind | Purpose |
+|---|---|---|
+| `influxdb-auth` | Secret | Holds the `INFLUX_TOKEN` used by InfluxDB (admin), Telegraf (write), Grafana (query), and UA Cloud Action (query). Supplied at deploy time via `${INFLUX_TOKEN}`. |
+| `telegraf-conf` | ConfigMap | Telegraf configuration (MQTT inputs + InfluxDB output). |
+| `mosquitto-conf` | ConfigMap | Mosquitto broker configuration (TLS listener, authentication, persistence). |
+| `ua-cloudpublisher-settings` | ConfigMap | Seeds the Publisher's `settings.json` (broker connection, topics, metadata) and `persistency.json` (published nodes for the simulated line) on first start. |
+| `grafana-datasources`, `grafana-dashboard-provider`, `grafana-dashboards` | ConfigMaps | Provision the InfluxDB data source and the starter dashboard. |
+| `opcua-model-importer` | ConfigMap | Importer script for [loading OPC UA Information Models](#importing-an-opc-ua-information-model-into-influxdb-ua-cloud-library) from the UA Cloud Library. |
+| `portainer-sa-clusteradmin` / `portainer-crb-clusteradmin` | ServiceAccount / ClusterRoleBinding | Grant Portainer in-cluster access to the K3s API server. |
 
 Data flow:
 
