@@ -236,7 +236,7 @@ end-to-end pipeline from industrial protocols to a time-series database.
 | `opcua-model-importer` | ConfigMap | Importer script for [loading OPC UA Information Models](./tutorial-import-information-model.md) from the UA Cloud Library. |
 | `portainer-sa-clusteradmin` / `portainer-crb-clusteradmin` | ServiceAccount / ClusterRoleBinding | Grant Portainer in-cluster access to the K3s API server. |
 
-Data flow:
+**Data flow**
 
 ![Reference solution architecture and data flow](./arch.png)
 
@@ -293,8 +293,13 @@ kubectl get nodes
 
 ### Apply the Stack Manifests
 
-1. Copy `edge.yaml` and `cloud.yaml` onto the device (e.g. with `git clone`, `scp`, or by
-   pasting them into files opened via a text editor like nano).
+1. Download `edge.yaml` and `cloud.yaml` onto the device:
+
+   ```bash
+   curl -fsSLO https://raw.githubusercontent.com/OPCF-Members/Cloud-Initiative-Reference-Solution/main/edge.yaml
+   curl -fsSLO https://raw.githubusercontent.com/OPCF-Members/Cloud-Initiative-Reference-Solution/main/cloud.yaml
+   ```
+
 2. Provide the deployment credentials and InfluxDB token. The manifests
    reference `${IOT_USERNAME}`, `${IOT_PASSWORD}`, and `${INFLUX_TOKEN}`, so set
    them and substitute them at apply time:

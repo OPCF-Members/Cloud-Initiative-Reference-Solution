@@ -5,11 +5,6 @@ productivity. This tutorial computes it **per station** and **for the whole
 production line** from the OPC UA telemetry already flowing into InfluxDB, and
 charts the result in Grafana.
 
-It follows the calculation used by the Digital Twin Consortium
-[Manufacturing Ontologies](https://github.com/digitaltwinconsortium/ManufacturingOntologies)
-reference solution (which implements it in Kusto/KQL against Azure Data Explorer),
-re-expressed here as **Flux** queries against InfluxDB.
-
 ## Table of Contents
 
 - [The Calculation](#the-calculation)
@@ -187,49 +182,12 @@ array.from(
 )
 ```
 
-> **Why `sum()` is correct for `FaultyTime`.** In the station simulation
-> ([`StationNodeManager.cs`](https://github.com/digitaltwinconsortium/ManufacturingOntologies/blob/main/Tools/FactorySimulation/Station/StationNodeManager.cs)),
-> `FaultyTime` is **not** a cumulative counter. A `Stopwatch` is started when the
-> station faults, stopped when the fault is cleared, and then:
->
-> ```csharp
-> if (!m_faultClock.IsRunning)
-> {
->     m_faultyTime = (ulong)m_faultClock.ElapsedMilliseconds;  // duration of that fault
->     if (m_faultClock.ElapsedMilliseconds != 0)
->     {
->         m_faultClock.Reset();                                // -> next update reports 0
->     }
-> }
-> ```
->
-> So each fault produces a **single spike** carrying that episode's duration in
-> milliseconds, after which the value returns to `0`. Summing those spikes over
-> the window therefore yields total downtime — which is exactly what the
-> Manufacturing Ontologies KQL does. Do **not** use `max - min` here.
-
 > **What actually drives Availability in the simulation.** Faults occur randomly
 > (`stationFailure = NormalDistribution(...) > 3.0`, i.e. a rare >3σ event per
 > cycle). When a station enters `Fault`, the **MES** — not an external
 > application — clears it, after a fixed delay that simulates manual intervention
-> ([`Program.cs`](https://github.com/digitaltwinconsortium/ManufacturingOntologies/blob/main/Tools/FactorySimulation/Station/Program.cs)):
->
-> ```csharp
-> case StationStatus.Fault:
->     // station is at fault state, wait some time to simulate manual intervention before reseting
->     await Task.Delay(c_waitTime);            // c_waitTime = 60 * 1000 -> 60 s
->     await session.CallAsync(RootMethodNode, ResetMethodNode);
-> ```
->
 > So each fault contributes roughly **60 seconds** of downtime, and Availability is
 > governed by how *often* stations fault rather than how long each fault lasts.
-
-> **The pressure loop does not affect OEE here.** UA Cloud Action calls
-> `OpenPressureReleaseValve` (`i=435`), which resets the station's slowly-rising
-> `Pressure` back to its default. Pressure is independent of the random fault
-> generator in this simulation, so that
-> [feedback loop](./tutorial-command-and-control.md#automated-feedback-loop-with-ua-cloud-action)
-> demonstrates closed-loop control but does **not** move the OEE numbers.
 
 > **Empty windows:** `findRecord` errors if the query returns no rows. If you
 > select a time range before the simulation started, widen the range.
