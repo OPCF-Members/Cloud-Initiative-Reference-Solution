@@ -35,6 +35,7 @@ OPC Foundation Cloud Initiative Open-Source Reference Solution
   - [Calculating OEE](./tutorial-oee.md)
   - [Importing an OPC UA Information Model](./tutorial-import-information-model.md)
   - [Command & Control with UA Cloud Commander](./tutorial-command-and-control.md)
+  - [Building Custom Apps for the Reference Solution](./tutorial-building-custom-apps.md)
 - [Security Analysis (STRIDE)](#security-analysis-stride)
   - [Trust Boundaries and Assets](#trust-boundaries-and-assets)
   - [STRIDE Threat Assessment](#stride-threat-assessment)
@@ -219,7 +220,7 @@ end-to-end pipeline from industrial protocols to a time-series database.
   **Requestor**. Polls a configured InfluxDB field and, when it crosses a threshold,
   publishes a `ua-action-request` (MethodCall) to the `commands` topic for Cloud
   Commander to execute — closing the digital feedback loop. Also hosts a status web
-  UI and the [OPC UA Web API](./tutorial-command-and-control.md#accessing-the-opc-ua-web-api-ua-cloud-action).
+  UI and the [OPC UA Web API](./tutorial-building-custom-apps.md#accessing-the-opc-ua-web-api-ua-cloud-action).
 - **portainer** — *Portainer CE*, a web UI to manage the K3s cluster (workloads,
   logs, shells, events). Runs under a `cluster-admin`-bound ServiceAccount.
 
@@ -710,7 +711,8 @@ Step-by-step guides live in their own files to keep this README readable:
 | [Dashboards with Grafana](./tutorial-grafana-dashboards.md) | Use the pre-provisioned InfluxDB data source and starter dashboard. |
 | [Calculating OEE](./tutorial-oee.md) | Compute Availability, Performance, Quality and OEE per station and for the whole line, and chart it in Grafana. |
 | [Importing an OPC UA Information Model](./tutorial-import-information-model.md) | Load a model from the UA Cloud Library into InfluxDB. |
-| [Command & Control with UA Cloud Commander](./tutorial-command-and-control.md) | Send OPC UA Actions over MQTT, close the feedback loop, and use the OPC UA Web API. |
+| [Command & Control with UA Cloud Commander](./tutorial-command-and-control.md) | Send OPC UA Actions over MQTT and close the digital feedback loop. |
+| [Building Custom Apps for the Reference Solution](./tutorial-building-custom-apps.md) | Use the OPC UA Web API and the UA Web API Starter Kit to build your own applications. |
 
 ## Security Analysis (STRIDE)
 
