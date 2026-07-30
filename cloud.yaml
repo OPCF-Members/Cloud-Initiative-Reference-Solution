@@ -216,6 +216,13 @@ data:
     cafile /mosquitto/certs/ca.crt
     certfile /mosquitto/certs/server.crt
     keyfile /mosquitto/certs/server.key
+    # Mosquitto 2.0 defaults max_keepalive to 60s and, under MQTT 5.0, silently
+    # overrides any larger client request via the CONNACK "Server Keep Alive"
+    # property. UA Cloud Publisher asks for 100s (see MQTTClient.cs) and keeps
+    # pinging on that schedule, so the broker stops seeing PINGREQ in time and
+    # evicts the session with a clean "NormalDisconnection" every ~30s. Allow the
+    # longer interval so long-lived publisher sessions are not torn down.
+    max_keepalive 120
     # TLS + username/password authentication are enabled. For production,
     # replace the self-signed certificates with ones from a trusted CA.
 ---

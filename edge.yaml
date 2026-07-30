@@ -757,6 +757,13 @@ spec:
           value: "8883"
         - name: USE_TLS
           value: "true"
+        # Mosquitto uses a self-signed demo CA generated at deploy time (see
+        # gen-certs in cloud.yaml), so chain validation cannot succeed. This
+        # mirrors Telegraf's insecure_skip_verify and UA Cloud Action's
+        # MQTT_TLS_INSECURE. Remove it once the broker presents a cert from a
+        # CA the client trusts.
+        - name: ALLOW_UNTRUSTED_BROKER_CERT
+          value: "true"
         - name: CLIENTNAME
           value: "UACloudCommander"
         # Topic to subscribe to for incoming ua-action-request messages
