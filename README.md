@@ -12,9 +12,8 @@ OPC Foundation Cloud Initiative Open-Source Reference Solution
 - [Reference Edge Hardware](#reference-edge-hardware)
 - [Deploying the Software Stack](#deploying-the-software-stack)
   - [What the Stack Contains](#what-the-stack-contains)
-  - [Install K3s on the Pi](#install-k3s-on-the-pi)
+  - [Install K3s](#install-k3s)
     - [Prerequisite: enable memory cgroups (Raspberry Pi only)](#prerequisite-enable-memory-cgroups-raspberry-pi-only)
-    - [Install](#install)
   - [Apply the Stack Manifests](#apply-the-stack-manifests)
   - [Where Telemetry Data Is Persisted](#where-telemetry-data-is-persisted)
 - [Simulated Production Line](#simulated-production-line)
@@ -27,18 +26,14 @@ OPC Foundation Cloud Initiative Open-Source Reference Solution
   - [Using It Manually](#using-it-manually)
 - [Accessing the Web UIs](#accessing-the-web-uis)
 - [Managing the Cluster with Portainer](#managing-the-cluster-with-portainer)
-- [Onboarding an OPC UA Device](#onboarding-an-opc-ua-device)
-- [Onboarding a Non-OPC UA Device](#onboarding-a-non-opc-ua-device)
-- [Querying Data in the InfluxDB Dashboard](#querying-data-in-the-influxdb-dashboard)
-- [Dashboards with Grafana](#dashboards-with-grafana)
-- [Importing an OPC UA Information Model into InfluxDB (UA Cloud Library)](#importing-an-opc-ua-information-model-into-influxdb-ua-cloud-library)
-- [Command & Control with UA Cloud Commander](#command--control-with-ua-cloud-commander)
-  - [How It Is Configured](#how-it-is-configured)
-  - [Sending a Command](#sending-a-command)
-  - [Automated Feedback Loop with UA Cloud Action](#automated-feedback-loop-with-ua-cloud-action)
-- [Accessing the OPC UA Web API (UA Cloud Action)](#accessing-the-opc-ua-web-api-ua-cloud-action)
-  - [Reaching the Web API](#reaching-the-web-api)
-  - [Building Custom Apps with the Starter Kit](#building-custom-apps-with-the-starter-kit)
+- [Tutorials](#tutorials)
+  - [Onboarding an OPC UA Device](./tutorial-onboarding-opcua-device.md)
+  - [Onboarding a Non-OPC UA Device](./tutorial-onboarding-non-opcua-device.md)
+  - [Querying Data in the InfluxDB Dashboard](./tutorial-influxdb-queries.md)
+  - [Dashboards with Grafana](./tutorial-grafana-dashboards.md)
+  - [Calculating OEE](./tutorial-oee.md)
+  - [Importing an OPC UA Information Model](./tutorial-import-information-model.md)
+  - [Command & Control with UA Cloud Commander](./tutorial-command-and-control.md)
 - [Security Analysis (STRIDE)](#security-analysis-stride)
   - [Trust Boundaries and Assets](#trust-boundaries-and-assets)
   - [STRIDE Threat Assessment](#stride-threat-assessment)
@@ -223,7 +218,7 @@ end-to-end pipeline from industrial protocols to a time-series database.
   **Requestor**. Polls a configured InfluxDB field and, when it crosses a threshold,
   publishes a `ua-action-request` (MethodCall) to the `commands` topic for Cloud
   Commander to execute — closing the digital feedback loop. Also hosts a status web
-  UI and the [OPC UA Web API](#accessing-the-opc-ua-web-api-ua-cloud-action).
+  UI and the [OPC UA Web API](./tutorial-command-and-control.md#accessing-the-opc-ua-web-api-ua-cloud-action).
 - **portainer** — *Portainer CE*, a web UI to manage the K3s cluster (workloads,
   logs, shells, events). Runs under a `cluster-admin`-bound ServiceAccount.
 
@@ -238,7 +233,7 @@ end-to-end pipeline from industrial protocols to a time-series database.
 | `modbus-simulator` | ConfigMap | The Python Modbus TCP simulation server run by the simulated device. |
 | `modbus-thing-description` | ConfigMap | W3C WoT Thing Description seeded into UA Edge Translator so the Modbus device is onboarded as an OPC UA asset at startup. |
 | `grafana-datasources`, `grafana-dashboard-provider`, `grafana-dashboards` | ConfigMaps | Provision the InfluxDB data source and the starter dashboard. |
-| `opcua-model-importer` | ConfigMap | Importer script for [loading OPC UA Information Models](#importing-an-opc-ua-information-model-into-influxdb-ua-cloud-library) from the UA Cloud Library. |
+| `opcua-model-importer` | ConfigMap | Importer script for [loading OPC UA Information Models](./tutorial-import-information-model.md) from the UA Cloud Library. |
 | `portainer-sa-clusteradmin` / `portainer-crb-clusteradmin` | ServiceAccount / ClusterRoleBinding | Grant Portainer in-cluster access to the K3s API server. |
 
 Data flow:
@@ -397,7 +392,7 @@ namespace. It consists of four OPC UA servers:
 Each station simulates a real machine, exposing OPC UA variables such as
 production status, pressure, energy consumption, and product counts, and it
 implements OPC UA methods (e.g. opening a pressure relief valve) that the
-[command & control path](#command--control-with-ua-cloud-commander) can invoke.
+[command & control path](./tutorial-command-and-control.md) can invoke.
 
 > The stations run in the `munich` namespace on purpose: their in-cluster DNS
 > names (`mes.munich`, `assembly.munich`, …) then match the OPC UA application
@@ -525,7 +520,7 @@ device published as OPC UA PubSub with zero manual configuration, enabling
 > address and edit the register addresses/types — no code, no rebuild. Remember to
 > add the resulting NodeIds (namespace derived from your TD's `name`) to the
 > Publisher if you want the data published. See
-> [Onboarding a Non-OPC UA Device](#onboarding-a-non-opc-ua-device) and the
+> [Onboarding a Non-OPC UA Device](./tutorial-onboarding-non-opcua-device.md) and the
 > additional examples in the
 > [UA Edge Translator samples](https://github.com/OPCFoundation/UA-EdgeTranslator/tree/main/Samples).
 
@@ -534,7 +529,7 @@ device published as OPC UA PubSub with zero manual configuration, enabling
 > `wait-for-modbus` init containers, the `persistency.json` entries, and the
 > `modbus-thing-description` ConfigMap from `edge.yaml`, then onboard your real
 > devices as described in
-> [Onboarding an OPC UA Device](#onboarding-an-opc-ua-device).
+> [Onboarding an OPC UA Device](./tutorial-onboarding-opcua-device.md).
 
 ## Automatic Certificate Provisioning (GDS Server Push)
 
@@ -645,416 +640,19 @@ First-time setup:
    Publisher, Cloud Commander, Mosquitto, Telegraf, and InfluxDB workloads, view
    their logs, exec into containers, and monitor cluster resources.
 
-## Onboarding an OPC UA Device
-
-Use this path when the device already speaks OPC UA (including data that the Edge
-Translator has already exposed).
-
-1. Open the **UA Cloud Publisher** UI at `http://<device-ip>:8081` (log in with
-   the `IOT_USERNAME` / `IOT_PASSWORD` you set, exposed via the manifest
-   `PUBLISHER_USERNAME` / `PUBLISHER_PASSWORD` env vars).
-2. Go to **OPC UA Connect** and enter the device's OPC UA endpoint URL, e.g.:
-   - The Edge Translator: `opc.tcp://<device-ip>`
-   - A standalone OPC UA device: `opc.tcp://<device-address>:<port>`
-3. Set the security policy and, if required, the credentials (`OPCUA_USERNAME` /
-   `OPCUA_PASSWORD`, i.e. the `IOT_USERNAME` / `IOT_PASSWORD` you set) and click **Connect**.
-   > On first connect the client and server exchange certificates. If the UA Cloud Publisher
-   > connection is rejected, trust its certificate in the OPC UA device and retry.
-   > If the device supports the OPC UA Server Push Configuration model, the
-   > Publisher can provision the trust relationship for you automatically — see
-   > [Automatic Certificate Provisioning (GDS Server Push)](#automatic-certificate-provisioning-gds-server-push).
-4. **Browse** the device's address space and select the variable nodes you want
-   to publish and click the 'publish' button.
-5. The Publisher immediately begins sending OPC UA PubSub JSON messages to Mosquitto (`data/#`), and the metadata
-   describing each dataset to the `metadata` topic. Confirm data is flowing by checking the InfluxDB `mqtt` bucket (see
-   [Querying Data in the InfluxDB Dashboard](#querying-data-in-the-influxdb-dashboard)).
-
-## Onboarding a Non-OPC UA Device
-
-The UA Edge Translator uses **W3C Web of Things (WoT) Thing Descriptions (TDs)**
-to model a non-OPC UA asset (e.g. Modbus TCP, LoRaWAN, OCPP, or an HTTP/REST
-device) and expose its data points as OPC UA nodes. Once mapped, the device is
-published exactly like a native OPC UA device.
-
-1. Open the **UA Cloud Publisher** UI at `http://<device-ip>:8081` (log in with
-   the `IOT_USERNAME` / `IOT_PASSWORD` you set, exposed via the manifest
-   `PUBLISHER_USERNAME` / `PUBLISHER_PASSWORD` env vars).
-2. Go to **UA Edge Translator** and provide a **WoT Thing Description** for your asset.
-   The Thing Description declares:
-   - the **protocol binding** (e.g. `modbus+tcp://<device-ip>:502`, an OCPP/
-     LoRaWAN endpoint, or an HTTP base URL),
-   - the device's **properties/telemetry** (each becomes an OPC UA variable), and
-   - the **datatype, access, and addressing** (e.g. Modbus register/coil, unit id)
-     for each property. 
-   
-   If your device vendor didn't supply a Thing Description, see [Generating WoT Thing Descriptions from PLC Engineering Tools](https://github.com/OPCFoundation/UA-EdgeTranslator#generating-wot-thing-descriptions-from-plc-engineering-tools). and [Generating a WoT Thing Description for a Foxed-Function Asset](https://github.com/OPCFoundation/UA-EdgeTranslator#generating-a-thing-description-for-a-fixed-function-asset) on how to generate a Thing Description.
-   
-   Uploaded TDs are persisted on the Pi under `/translator/settings`.
-   The Edge Translator connects to the asset over its native protocol and instantiates the mapped data points as OPC
-   UA nodes in its address space (served at `opc.tcp://<device-ip>:4840`).
-
-   All asset tags specified in the Thing Description as properties are automatically published.
-
-## Querying Data in the InfluxDB Dashboard
-
-InfluxDB 2.x includes a built-in UI with a **Data Explorer** and **Dashboards**
-that query data using the **Flux** language.
-
-1. Browse to `http://<device-ip>:8086` and sign in with the `IOT_USERNAME` / `IOT_PASSWORD` you set.
-2. Go to **Data Explorer** (the graph icon) to build and preview queries, or
-   **Dashboards → Create Dashboard → Add Cell** to pin a query to a dashboard.
-3. Data written by Telegraf lands in the **`mqtt`** bucket under the measurements
-   **`opcua_pubsub`** (live values) and **`opcua_metadata`** (schema/metadata).
-
-**Example Flux query** (paste into a Data Explorer / dashboard cell in
-**Script Editor** mode). This joins the live `opcua_pubsub` data with the
-`opcua_metadata` schema on `datasetWriterId` so each series is labelled with its
-human-readable metadata name:
-
-```flux
-data =
-  from(bucket: "mqtt")
-    |> range(start: v.timeRangeStart, stop: v.timeRangeStop)
-    |> filter(fn: (r) =>
-      r._measurement == "opcua_pubsub" and
-      r._field == "Payload_VoltageL-N_Value_C"
-    )
-    |> keep(columns: ["_time", "_value", "datasetWriterId"])
-    |> group(columns: ["datasetWriterId"])
-    |> sort(columns: ["_time"])
-
-meta =
-  from(bucket: "mqtt")
-    |> range(start: -30d)
-    |> filter(fn: (r) =>
-      r._measurement == "opcua_metadata" and
-      r._field == "cfgMajor"
-    )
-    |> group(columns: ["datasetWriterId"])
-    |> last()
-    |> keep(columns: ["datasetWriterId", "metaName"])
-    |> group(columns: ["datasetWriterId"])
-
-join(tables: {d: data, m: meta}, on: ["datasetWriterId"], method: "inner")
-  |> map(fn: (r) => ({
-      _time: r._time,
-      _value: float(v: r._value),
-      _source: r.datasetWriterId,
-      _tagName: r.metaName
-  }))
-```
-
-> **Tip:** Use the Data Explorer's visual **Query Builder** to discover the exact
-> `_field` names available (they mirror the OPC UA PubSub payload keys, e.g.
-> `Payload_<NodeName>_Value`), then switch to the **Script Editor** to refine the
-> Flux and save the cell to a dashboard. Set the cell's refresh interval and time
-> range at the top of the dashboard for live monitoring.
-
-## Dashboards with Grafana
-
-**Grafana** is deployed by `cloud.yaml` as an alternative to InfluxDB's
-built-in dashboards, with richer visualization, templating, and alerting. It comes
-**pre-provisioned** so no manual setup is needed beyond logging in.
-
-What the manifest provisions automatically:
-
-- **InfluxDB data source** (`grafana-datasources` ConfigMap) — points at
-  `http://influxdb.cloud.svc.cluster.local:8086` using the **Flux** query
-  language, org `iot`, and default bucket `mqtt`. The query token is injected from
-  the `influxdb-auth` Secret via the `INFLUX_TOKEN` environment variable
-  (interpolated into the provisioned data source at startup).
-- **Dashboard provider** (`grafana-dashboard-provider` ConfigMap) — loads any
-  dashboards found under `/var/lib/grafana/dashboards`.
-- **Starter dashboard** (`grafana-dashboards` ConfigMap) — *OPC UA Telemetry
-  Overview* (uid `opcua-overview`) with a time-series panel of `opcua_pubsub`
-  values, an ingest-rate stat, an active-dataset-writers stat, and a `publisher`
-  template variable for filtering.
-
-Usage:
-
-1. Browse to `http://<device-ip>:3000` and log in with your `IOT_USERNAME` /
-   `IOT_PASSWORD` (Grafana admin credentials set via `GF_SECURITY_ADMIN_USER` /
-   `GF_SECURITY_ADMIN_PASSWORD`).
-2. Open **Dashboards → OPC UA Telemetry Overview** to see live data flowing from
-   the `mqtt` bucket.
-3. Use the **InfluxDB** data source in **Explore** or when adding new panels; write
-   Flux queries exactly as in the [InfluxDB dashboard section](#querying-data-in-the-influxdb-dashboard).
-4. Grafana settings and any dashboards you create are persisted on the Pi at
-   `/grafana`. (The provisioned data source and starter dashboard are managed by
-   the ConfigMaps and re-applied on restart.)
-
-> **Note:** the starter dashboard's numeric time-series panel assumes numeric
-> fields (e.g. `Payload_<NodeName>_Value`). Adjust the panel's Flux filter to
-> match the exact `_field` names your assets publish.
-
-## Importing an OPC UA Information Model into InfluxDB (UA Cloud Library)
-
-You can pre-load the **full set of variables** an OPC UA server *could* expose —
-not just the ones currently being published — by importing its **Information
-Model** from the OPC Foundation [UA Cloud Library](https://uacloudlibrary.opcfoundation.org)
-into InfluxDB.
-
-Each model variable is written as a placeholder point (field `status="[Future]"`)
-into a dedicated **`opcua_model`** measurement in the `mqtt` bucket, so you can see
-every *potential* node alongside the live `opcua_pubsub` values.
-
-> A separate measurement is used (rather than mixing into `opcua_pubsub`) because
-> InfluxDB fields are single-typed — the model's placeholder is a string, while
-> live telemetry values are numeric.
-
-The importer is provided as an on-demand Kubernetes Job in
-[`import-opcua-model.yaml`](./import-opcua-model.yaml). It uses a small
-standard-library Python script that downloads the model's NodeSet2 XML from the
-Cloud Library REST API, extracts every `UAVariable`, and writes them to InfluxDB
-using the token from the existing `influxdb-auth` Secret.
-
-Steps:
-
-1. **Register** (free) at the UA Cloud Library and note the **model id** of the
-   model you want (visible in its Explorer URL — e.g. the `Station` nodeset is
-   `1627266626`).
-2. **Run the import Job**, supplying your Cloud Library credentials and the model
-   id (substituted at apply time):
-
-   ```bash
-   export UACLOUDLIB_USERNAME="myUser"
-   export UACLOUDLIB_PASSWORD="myPass"
-   export UACLOUDLIB_MODEL_ID="1627266626"
-   kubectl delete job import-opcua-model -n cloud --ignore-not-found
-   envsubst < import-opcua-model.yaml | kubectl apply -f -
-   kubectl logs -f job/import-opcua-model -n cloud
-   ```
-
-   The log prints how many variables were imported.
-3. **Query the imported model** in the InfluxDB Data Explorer or Grafana:
-
-   ```flux
-   from(bucket: "mqtt")
-     |> range(start: -1h)
-     |> filter(fn: (r) => r._measurement == "opcua_model")
-     |> filter(fn: (r) => r._field == "displayName")
-     |> keep(columns: ["_value", "nodeId", "dataType", "namespaceUri", "model"])
-   ```
-
-> The Cloud Library endpoint (`uacloudlibrary.opcfoundation.org`) must be
-> reachable from the cluster for the import Job to run. The Job auto-cleans up one
-> hour after completion (`ttlSecondsAfterFinished`).
-
-## Command & Control with UA Cloud Commander
-
-While the Publisher → Telegraf → InfluxDB path handles **read-only telemetry**,
-**UA Cloud Commander** adds a **command & control** path so a cloud (or local)
-application can remotely **read, write, call methods on, and historically read**
-OPC UA nodes on the edge — all over the same Mosquitto broker.
-
-Cloud Commander implements the OPC UA PubSub **Actions** request/response pattern
-(IEC 62541-14). It acts as the **Responder**: it subscribes to the `commands/#`
-topic, executes the requested OPC UA operation against an on-premises OPC UA
-server (e.g. the Edge Translator at `opc.tcp://<device-ip>:4840`), and publishes
-the result to the `responses` topic.
-
-### How It Is Configured
-
-`ua-cloudcommander` is deployed by `cloud.yaml` and connects to Mosquitto via
-these environment variables (no web UI — it is configured entirely through env):
-
-| Variable | Value | Purpose |
-|----------|-------|---------|
-| `BROKERNAME` | `mosquitto.cloud.svc.cluster.local` | In-cluster Mosquitto Service. |
-| `BROKERPORT` | `8883` | TLS MQTT port. |
-| `USE_TLS` | `true` | Mosquitto requires TLS. |
-| `CLIENTNAME` | `UACloudCommander` | MQTT client id / Responder `PublisherId`. |
-| `TOPIC` | `commands/#` | Topic it subscribes to for `ua-action-request` messages. |
-| `RESPONSE_TOPIC` | `responses` | Default topic for `ua-action-response` messages (used when a request omits `ResponseAddress`). |
-| `USERNAME` / `PASSWORD` | `${IOT_USERNAME}` / `${IOT_PASSWORD}` | Broker credentials (same as the rest of the stack). |
-| `UA_USERNAME` / `UA_PASSWORD` | `${IOT_USERNAME}` / `${IOT_PASSWORD}` | Credentials used to sign in to the target OPC UA servers. |
-
-The OPC UA client certificate and logs are persisted on the Pi under
-`/commander/pki` and `/commander/logs`.
-
-> **Self-signed TLS:** Mosquitto uses a self-signed certificate generated at pod
-> startup. If Cloud Commander rejects the TLS handshake, mount/trust the broker's
-> CA certificate in the Commander container (or use a trusted-CA certificate for
-> Mosquitto) as recommended in the security note above.
-
-### Sending a Command
-
-Publish a `ua-action-request` NetworkMessage to the `commands` topic and listen
-on `responses` for the reply. For example, to **read** a node (from a machine that
-can reach the broker, using the stack credentials over TLS):
-
-```bash
-# Subscribe for responses in one terminal
-mosquitto_sub -h <device-ip> -p 8883 --cafile ca.crt \
-  -u "$IOT_USERNAME" -P "$IOT_PASSWORD" -t responses
-
-# Publish a Read request in another terminal
-mosquitto_pub -h <device-ip> -p 8883 --cafile ca.crt \
-  -u "$IOT_USERNAME" -P "$IOT_PASSWORD" -t commands -m '{
-    "MessageId": "32235f26-4a3a-4a56-9f1f-2b6f8a2f0a11",
-    "MessageType": "ua-action-request",
-    "PublisherId": "MyCloudApp",
-    "Timestamp": "2022-11-28T12:01:00.0923534Z",
-    "RequestorId": "MyCloudApp",
-    "TimeoutHint": 15000,
-    "Messages": [
-      {
-        "DataSetWriterId": 1,
-        "ActionTargetId": 1,
-        "RequestId": 1,
-        "ActionState": 1,
-        "Payload": {
-          "Endpoint": "opc.tcp://<device-ip>:4840",
-          "NodeId": "http://opcfoundation.org/UA/Station/;i=123"
-        }
-      }
-    ]
-  }'
-```
-
-The `ActionTargetId` selects the operation: **1 = Read**, **2 = HistoricalRead**,
-**3 = Write**, **4 = MethodCall**. Cloud Commander replies on `responses` with a
-`ua-action-response` message echoing `RequestorId` / `RequestId` and containing
-the `Result` (or an `Error`). See the
-[UA Cloud Commander documentation](https://github.com/OPCFoundation/UA-CloudCommander)
-for the full payload schema of each operation.
-
-### Automated Feedback Loop with UA Cloud Action
-
-**UA Cloud Action** is the automated **Requestor** counterpart to Cloud Commander.
-Instead of a human publishing a command, it **polls telemetry and reacts**: on a
-15-second loop it queries a configured value and, when it crosses a threshold,
-publishes a `ua-action-request` (a `MethodCall`) to the `commands` topic — which
-Cloud Commander executes on the target OPC UA server. This closes an edge-local
-**digital feedback loop** entirely on the Pi.
-
-In this reference stack it is deployed (`cloud.yaml`) to read from **InfluxDB**
-and drive Commander over Mosquitto:
-
-| Variable | Value | Purpose |
-|----------|-------|---------|
-| `DATA_SOURCE` | `InfluxDB` | Use InfluxDB as the trigger source (instead of Azure Data Explorer). |
-| `INFLUX_URL` | `http://influxdb.cloud.svc.cluster.local:8086` | InfluxDB endpoint. |
-| `INFLUX_ORG` / `INFLUX_BUCKET` | `iot` / `mqtt` | Org and bucket to query. |
-| `INFLUX_MEASUREMENT` | `opcua_pubsub` | Measurement to query. |
-| `INFLUX_FIELD` | `Payload_Pressure_Value` | **Numeric field to evaluate — change to match your assets.** |
-| `INFLUX_THRESHOLD` | `4000` | Trigger when the latest value exceeds this. |
-| `INFLUX_RANGE` | `-1m` | Look-back window for the latest value. |
-| `INFLUX_TOKEN` | *(from `influxdb-auth`)* | Query token. |
-| `MESSAGING_PLATFORM` | `MQTT` | Reach Commander over MQTT (not Kafka). |
-| `MQTT_TARGET` | `UACloudCommander` | Send the full OPC UA PubSub ActionRequest envelope. |
-| `BROKER_NAME` / `MQTT_PORT` | `mosquitto…` / `8883` | Mosquitto broker (TLS). |
-| `MQTT_USE_TLS` / `MQTT_TLS_INSECURE` | `true` / `true` | TLS with the self-signed broker cert (verification skipped, like Telegraf). |
-| `BROKER_USERNAME` / `BROKER_PASSWORD` | `${IOT_USERNAME}` / `${IOT_PASSWORD}` | Broker credentials. |
-| `TOPIC` / `RESPONSE_TOPIC` | `commands` / `responses` | The topics Cloud Commander subscribes/replies on. |
-| `UA_SERVER_ENDPOINT`, `UA_SERVER_METHOD_ID`, `UA_SERVER_OBJECT_ID`, … | *(placeholders)* | The OPC UA method Cloud Commander invokes on trigger — set these to a real method on your target server (e.g. the Edge Translator). |
-
-> **InfluxDB data source:** support for querying InfluxDB was added to UA Cloud
-> Action for this stack (the upstream app queries Azure Data Explorer). The
-> `DATA_SOURCE=InfluxDB` branch runs a Flux query for the latest `INFLUX_FIELD`
-> value and compares it to `INFLUX_THRESHOLD`. Set `INFLUX_FIELD` to a numeric
-> field your assets actually publish (discover exact names in the InfluxDB Data
-> Explorer or Grafana), otherwise no trigger will fire.
-
-A small status UI is available at `http://<device-ip>:8082` (log in with your
-`IOT_USERNAME` / `IOT_PASSWORD`), showing connectivity to the data source, the
-broker, and Cloud Commander.
-
-## Accessing the OPC UA Web API (UA Cloud Action)
-
-In addition to the MQTT-based feedback loop, **UA Cloud Action** exposes an
-**OPC UA Web API** — a RESTful, [OpenAPI](https://swagger.io/specification/)-based
-HTTP interface to the standard OPC UA services defined in
-[IEC 62541-4](https://reference.opcfoundation.org/Core/Part4/v105/docs/). This
-lets you build **custom applications** — dashboards, mobile apps, analytics jobs,
-or backend integrations — that talk to the edge's OPC UA servers over plain
-HTTP/JSON, without embedding a native OPC UA stack.
-
-> **Implemented services:** this reference deployment implements the
-> **`Read`**, **`HistoryRead`** (historical read), and **`Browse`** services of
-> the OPC UA Web API. Other services (`Write`, `Call`, etc.) are **not implemented** due to security considerations — requests to them are not available. Use UA Cloud Commander (the
-> MQTT command path) for `Write`/`Call` operations in the meantime.
-
-> **Note:** the Web API is being implemented in UA Cloud Action. The endpoints and
-> auth described below track the OPC UA Web API specification; confirm the exact
-> routes against the running service's OpenAPI/Swagger document.
-
-### Reaching the Web API
-
-The API is served by the `ua-cloudaction` container and reachable through its
-Service at:
-
-```
-http://<device-ip>:8082
-```
-
-- The **OpenAPI/Swagger** definition (e.g. `http://<device-ip>:8082/swagger`)
-  describes every available route and schema — point your tooling at it to explore
-  or generate clients. In the interactive **Swagger UI**, use the **Authorize**
-  button to supply the Basic credentials before invoking the `/opcua/read` and
-  `/opcua/historyread` operations.
-- **Authentication is mandatory.** The UA Cloud Action web UI and Web API require
-  **HTTP Basic authentication** on every request — there is no anonymous access.
-  Supply the `IOT_USERNAME` / `IOT_PASSWORD` credentials (set via the manifest's
-  `ADMIN_USERNAME` / `ADMIN_PASSWORD`) in the HTTP `Authorization: Basic <base64>`
-  header. Unauthenticated requests receive `401 Unauthorized` with a
-  `WWW-Authenticate: Basic` challenge.
-  > The OPC UA Web API specification also allows bearer/JWT tokens in the
-  > `Authorization` header (the reference gateway uses OAuth2 JWTs); Basic auth is
-  > what this reference deployment mandates.
-- **The API is rate limited** per client IP using a fixed window. The limit and
-  window are configurable via the `RATE_LIMIT_PERMIT` and
-  `RATE_LIMIT_WINDOW_SECONDS` environment variables (defaulting to **60 requests
-  per 60 seconds** in `cloud.yaml`). Requests exceeding the limit receive
-  `429 Too Many Requests`.
-- Behind the OPC UA Web API, UA Cloud Action forwards the requested service to the
-  target OPC UA server (e.g. the Edge Translator at
-  `opc.tcp://ua-edgetranslator.edge.svc.cluster.local:4840`).
-
-### Building Custom Apps with the Starter Kit
-
-Use the OPC Foundation
-[UA Web API Starter Kit](https://github.com/OPCFoundation/UA-WebApi-StarterKit/tree/master/UaWebApiClient)
-as the starting point. Its `UaWebApiClient` folder contains ready-to-run sample
-clients in several environments that call the OPC UA Web API using pre-built
-**stubs** (classes/constants for the OPC UA services, `BrowseName`s, and
-`NodeId`s):
-
-| Sample client | Language / stubs |
-|---------------|------------------|
-| `UaWebApiClient/csharp` | C# — [DotNet stubs](https://github.com/OPCFoundation/opcua-webapi-dotnet) |
-| `UaWebApiClient/nodejs` | JavaScript — [TypeScript stubs](https://github.com/OPCFoundation/opcua-webapi-typescript) |
-| `UaWebApiClient/react`  | TypeScript (browser) — TypeScript stubs |
-| `UaWebApiClient/python` | Python — [Python stubs](https://github.com/OPCFoundation/opcua-webapi-python) |
-
-Typical workflow to build your own app:
-
-1. **Clone the starter kit** and pick the sample client that matches your stack:
-   ```bash
-   git clone https://github.com/OPCFoundation/UA-WebApi-StarterKit.git
-   cd UA-WebApi-StarterKit/UaWebApiClient
-   ```
-2. **Point the client at your Web API endpoint** — set its base URL to
-   `http://<device-ip>:8082` (the UA Cloud Action Web API) and set the
-   `Authorization: Basic <base64(user:pass)>` header (mandatory) using your
-   `IOT_USERNAME` / `IOT_PASSWORD`.
-3. **Use the pre-built stubs** to invoke OPC UA services with typed
-   requests/responses instead of hand-crafting JSON. In this deployment the
-   available operations are **`Read`**, **`HistoryRead`**, and **`Browse`**
-   (reading current and historical variable values and browsing the address
-   space); `Write` and `Call` are not yet exposed by the Web API.
-4. **(Optional) Generate model-specific classes.** For DataTypes from a custom
-   information model, convert its NodeSet to an OpenAPI schema with the
-   [Opc.Ua.ModelCompiler](https://github.com/OPCFoundation/UA-ModelCompiler), then
-   generate typed classes with the
-   [OpenAPI Generator](https://openapi-generator.tech/) — exactly as the starter
-   kit does — so your app understands the model's structured values.
-5. **Iterate from a sample** — start from the closest `UaWebApiClient` sample and
-   extend it into your own dashboard, service, or integration.
-
-> Because the interface is standard OpenAPI, you can also generate a client in any
-> other language supported by the OpenAPI Generator directly from the service's
-> OpenAPI document, rather than using the pre-built stubs.
+## Tutorials
+
+Step-by-step guides live in their own files to keep this README readable:
+
+| Tutorial | What you will do |
+|---|---|
+| [Onboarding an OPC UA Device](./tutorial-onboarding-opcua-device.md) | Connect UA Cloud Publisher to an OPC UA server and publish its nodes. |
+| [Onboarding a Non-OPC UA Device](./tutorial-onboarding-non-opcua-device.md) | Map a non-OPC UA asset into OPC UA with a W3C WoT Thing Description. |
+| [Querying Data in the InfluxDB Dashboard](./tutorial-influxdb-queries.md) | Explore the telemetry with Flux queries and build InfluxDB dashboards. |
+| [Dashboards with Grafana](./tutorial-grafana-dashboards.md) | Use the pre-provisioned InfluxDB data source and starter dashboard. |
+| [Calculating OEE](./tutorial-oee.md) | Compute Availability, Performance, Quality and OEE per station and for the whole line, and chart it in Grafana. |
+| [Importing an OPC UA Information Model](./tutorial-import-information-model.md) | Load a model from the UA Cloud Library into InfluxDB. |
+| [Command & Control with UA Cloud Commander](./tutorial-command-and-control.md) | Send OPC UA Actions over MQTT, close the feedback loop, and use the OPC UA Web API. |
 
 ## Security Analysis (STRIDE)
 
