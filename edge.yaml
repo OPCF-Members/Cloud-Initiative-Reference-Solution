@@ -236,16 +236,6 @@ spec:
                                   && nc -z -w 2 packaging.munich 4840; do sleep 5; done' \
               && echo "Production line 'munich' is ready" \
               || echo "WARNING: not all munich stations reachable - starting anyway"
-            # A successful TCP connect only proves the OPC UA listener has bound the
-            # port - it does NOT mean MES has finished establishing its trusted
-            # sessions with assembly/test/packaging. If the Publisher starts pushing
-            # certificates during that window it re-issues each station's certificate
-            # mid-handshake and the line never leaves provisioning mode
-            # ("Certificate Issuer is not trusted"). The upstream StartSimulation.sh
-            # gets this right by sleeping 30s between applying the production line and
-            # the Publisher; mirror that settling time here.
-            echo "Letting the production line settle for 30s before publishing ..."
-            sleep 30
             exit 0
       # Wait for UA Edge Translator's OPC UA server as well: the persistency file
       # also subscribes to the Modbus asset it maps into OPC UA.
@@ -863,6 +853,13 @@ spec:
         ports:
         - containerPort: 4840
           name: opcua
+        volumeMounts:
+        - name: "pki"
+          mountPath: "/app/pki"
+      volumes:
+        - name: "pki"
+          hostPath:
+            path: "/productionline/munich/mes/pki"
 ---
 apiVersion: v1
 kind: Service
@@ -914,6 +911,13 @@ spec:
         ports:
         - containerPort: 4840
           name: opcua
+        volumeMounts:
+        - name: "pki"
+          mountPath: "/app/pki"
+      volumes:
+        - name: "pki"
+          hostPath:
+            path: "/productionline/munich/assembly/pki"
 ---
 apiVersion: v1
 kind: Service
@@ -965,6 +969,13 @@ spec:
         ports:
         - containerPort: 4840
           name: opcua
+        volumeMounts:
+        - name: "pki"
+          mountPath: "/app/pki"
+      volumes:
+        - name: "pki"
+          hostPath:
+            path: "/productionline/munich/test/pki"
 ---
 apiVersion: v1
 kind: Service
@@ -1016,6 +1027,13 @@ spec:
         ports:
         - containerPort: 4840
           name: opcua
+        volumeMounts:
+        - name: "pki"
+          mountPath: "/app/pki"
+      volumes:
+        - name: "pki"
+          hostPath:
+            path: "/productionline/munich/packaging/pki"
 ---
 apiVersion: v1
 kind: Service
