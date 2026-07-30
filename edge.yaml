@@ -820,18 +820,6 @@ spec:
         ports:
         - containerPort: 4840
           name: opcua
-        volumeMounts:
-        - name: "logs"
-          mountPath: "/app/logs"
-        - name: "pki"
-          mountPath: "/app/pki"
-      volumes:
-        - name: "logs"
-          hostPath:
-            path: "/productionline/munich/mes/logs"
-        - name: "pki"
-          hostPath:
-            path: "/productionline/munich/mes/pki"
 ---
 apiVersion: v1
 kind: Service
@@ -883,18 +871,6 @@ spec:
         ports:
         - containerPort: 4840
           name: opcua
-        volumeMounts:
-        - name: "logs"
-          mountPath: "/app/logs"
-        - name: "pki"
-          mountPath: "/app/pki"
-      volumes:
-        - name: "logs"
-          hostPath:
-            path: "/productionline/munich/assembly/logs"
-        - name: "pki"
-          hostPath:
-            path: "/productionline/munich/assembly/pki"
 ---
 apiVersion: v1
 kind: Service
@@ -946,18 +922,6 @@ spec:
         ports:
         - containerPort: 4840
           name: opcua
-        volumeMounts:
-        - name: "logs"
-          mountPath: "/app/logs"
-        - name: "pki"
-          mountPath: "/app/pki"
-      volumes:
-        - name: "logs"
-          hostPath:
-            path: "/productionline/munich/test/logs"
-        - name: "pki"
-          hostPath:
-            path: "/productionline/munich/test/pki"
 ---
 apiVersion: v1
 kind: Service
@@ -1009,18 +973,6 @@ spec:
         ports:
         - containerPort: 4840
           name: opcua
-        volumeMounts:
-        - name: "logs"
-          mountPath: "/app/logs"
-        - name: "pki"
-          mountPath: "/app/pki"
-      volumes:
-        - name: "logs"
-          hostPath:
-            path: "/productionline/munich/packaging/logs"
-        - name: "pki"
-          hostPath:
-            path: "/productionline/munich/packaging/pki"
 ---
 apiVersion: v1
 kind: Service
