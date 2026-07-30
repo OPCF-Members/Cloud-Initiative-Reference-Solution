@@ -87,6 +87,18 @@ spec:
           mountPath: "/app/settings"
         - name: "thing-descriptions"
           mountPath: "/seed"
+      # UA Edge Translator loads its southbound protocol drivers (Modbus, BACnet,
+      # OPC UA, MQTT, S7, EtherNet/IP, ...) as plain .NET assemblies from
+      # /app/drivers. They ship in a separate image so the driver pack can be
+      # revved independently of the server. Without this the translator starts
+      # with no protocol support and cannot onboard any asset.
+      - name: ua-edgetranslator-drivers
+        image: ghcr.io/opcfoundation/ua-edgetranslator-drivers:main
+        imagePullPolicy: Always
+        command: ["/bin/sh", "-c", "cp -a /drivers/. /app/drivers/"]
+        volumeMounts:
+        - name: "drivers"
+          mountPath: "/app/drivers"
       containers:
       - name: ua-edgetranslator
         image: ghcr.io/opcfoundation/ua-edgetranslator:main
@@ -103,7 +115,9 @@ spec:
         - containerPort: 5001
         - containerPort: 19520
         - containerPort: 19521
-        - containerPort: 8080
+        # Blazor diagnostics / configuration UI (DiagnosticsWebHost binds 8081).
+        - containerPort: 8081
+          name: http
         # The image ships a Docker HEALTHCHECK against 4840, but Kubernetes ignores
         # that - without an explicit probe the pod reports Ready while the OPC UA
         # listener may not be up at all.
@@ -128,6 +142,8 @@ spec:
           mountPath: "/app/pki"
         - name: "logs"
           mountPath: "/app/logs"
+        - name: "drivers"
+          mountPath: "/app/drivers"
       volumes:
         - name: "settings"
           hostPath:
@@ -147,6 +163,10 @@ spec:
         - name: "logs"
           hostPath:
             path: "/translator/logs"
+        # Populated by the ua-edgetranslator-drivers init container on every pod
+        # start, so the driver pack always matches the image that was pulled.
+        - name: "drivers"
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: Service
@@ -172,7 +192,7 @@ spec:
     targetPort: 19521
     port: 19521
   - name: http
-    targetPort: 8080
+    targetPort: 8081
     port: 8080
   selector:
     app: ua-edgetranslator
