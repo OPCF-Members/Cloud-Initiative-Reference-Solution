@@ -26,6 +26,7 @@ OPC Foundation Cloud Initiative Open-Source Reference Solution
   - [Using It Manually](#using-it-manually)
 - [Accessing the Web UIs](#accessing-the-web-uis)
 - [Managing the Cluster with Portainer](#managing-the-cluster-with-portainer)
+  - [Single Cluster vs. Split Edge/Cloud Deployment](#single-cluster-vs-split-edgecloud-deployment)
 - [Tutorials](#tutorials)
   - [Onboarding an OPC UA Device](./tutorial-onboarding-opcua-device.md)
   - [Onboarding a Non-OPC UA Device](./tutorial-onboarding-non-opcua-device.md)
@@ -630,6 +631,58 @@ How the K3s connection works:
   API server **in-cluster** using the mounted ServiceAccount token — it manages
   the local Kubernetes environment out of the box.
 - Portainer data (users, settings) is persisted on the Pi at `/portainer`.
+
+### Single Cluster vs. Split Edge/Cloud Deployment
+
+This matters as soon as you move away from the single-node default:
+
+| Topology | Does Portainer see the edge workloads? |
+|---|---|
+| **One K3s instance** (both manifests applied to the same cluster — the default) | **Yes.** The `edge`, `munich`, and `cloud` namespaces are all in the cluster Portainer runs in, so the in-cluster ServiceAccount covers them. Nothing else to do. |
+| **Separate edge and cloud clusters** | **No.** A ServiceAccount token is only valid for its own cluster, so a Portainer Server running in the cloud cluster has **no visibility of the edge cluster at all**. |
+
+For the split topology you need an extra component on the edge: the
+**Portainer Edge Agent**, provided in
+[`portainer-edge-agent.yaml`](./portainer-edge-agent.yaml).
+
+The Edge Agent dials **outbound** to the Portainer Server's tunnel port (**8000**,
+already published by the `portainer` Service in `cloud.yaml`), so the edge device
+needs **no inbound firewall rule and no public IP** — the normal situation for an
+industrial gateway behind NAT.
+
+```
+[Edge cluster]                                  [Cloud cluster]
+ portainer-agent  --- outbound tunnel :8000 --->  portainer (server)
+ (edge.yaml workloads)                            (cloud.yaml workloads)
+```
+
+To connect an edge cluster:
+
+1. In the Portainer UI choose **Environments → Add environment → Edge Agent →
+   Kubernetes**. Name it and copy the generated **Edge ID** and **Edge key**.
+2. On the **edge** cluster, apply the agent manifest with those values:
+
+   ```bash
+   curl -fsSLO https://raw.githubusercontent.com/OPCF-Members/Cloud-Initiative-Reference-Solution/main/portainer-edge-agent.yaml
+
+   export PORTAINER_EDGE_ID="<edge id from the UI>"
+   export PORTAINER_EDGE_KEY="<edge key from the UI>"
+   envsubst < portainer-edge-agent.yaml | kubectl apply -f -
+   ```
+
+3. The environment turns green in the Portainer UI once the tunnel is established,
+   and you can then manage the edge cluster alongside the cloud one.
+
+> **Alternative:** if the edge cluster *is* reachable from the cloud, you can use
+> the standard (non-Edge) Portainer Agent instead and have the server connect
+> inbound to it on port 9001. The Edge Agent is preferred for industrial
+> deployments precisely because it avoids opening inbound ports on the edge.
+
+> **Security:** the agent manifest binds to `cluster-admin` (same as the server)
+> and sets `EDGE_INSECURE_POLL=1` because the demo server uses a self-signed
+> certificate. Scope the role down and remove that flag once the Portainer Server
+> has a trusted certificate — see
+> [Production Hardening Recommendations](#production-hardening-recommendations).
 
 First-time setup:
 

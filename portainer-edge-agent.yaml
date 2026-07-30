@@ -1,0 +1,133 @@
+# Portainer Edge Agent - ONLY needed when the edge and cloud parts run on
+# SEPARATE Kubernetes clusters.
+#
+# Portainer's in-cluster ServiceAccount (created by cloud.yaml) only grants access
+# to the cluster Portainer itself runs in. If you deploy cloud.yaml to a cloud
+# cluster and edge.yaml to an edge cluster, the Portainer Server in the cloud has
+# no visibility of the edge cluster at all.
+#
+# This manifest deploys the Portainer **Edge Agent** onto the EDGE cluster. The
+# agent opens an OUTBOUND tunnel to the Portainer Server (port 8000, already
+# exposed by the portainer Service in cloud.yaml), so the edge device does not
+# need any inbound firewall rule or public IP - the normal situation for an
+# industrial gateway behind NAT.
+#
+# If you run everything on a single K3s instance (the default in the README),
+# you do NOT need this file.
+#
+# Usage:
+#   1. In the Portainer UI: Environments -> Add environment -> Edge Agent ->
+#      Kubernetes. Give it a name; Portainer generates an Edge ID and Edge key.
+#   2. Export them together with the server URL and apply:
+#
+#        export PORTAINER_EDGE_ID="<edge id from the UI>"
+#        export PORTAINER_EDGE_KEY="<edge key from the UI>"
+#        envsubst < portainer-edge-agent.yaml | kubectl apply -f -
+#
+#   3. The environment turns green in the Portainer UI once the tunnel is up.
+#
+# Note: the RBAC object names below deliberately differ from the ones in
+# cloud.yaml so that both can coexist if you ever apply them to the same cluster.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: portainer
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: portainer-edge-agent-sa
+  namespace: portainer
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: portainer-edge-agent-crb
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+subjects:
+  - kind: ServiceAccount
+    name: portainer-edge-agent-sa
+    namespace: portainer
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: portainer-edge-agent-key
+  namespace: portainer
+type: Opaque
+stringData:
+  edge.key: "${PORTAINER_EDGE_KEY}"
+---
+# Headless service used by the agent to discover its peers.
+apiVersion: v1
+kind: Service
+metadata:
+  name: portainer-agent-headless
+  namespace: portainer
+spec:
+  clusterIP: None
+  selector:
+    app: portainer-agent
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: portainer-agent
+  namespace: portainer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: portainer-agent
+  template:
+    metadata:
+      labels:
+        app: portainer-agent
+    spec:
+      nodeSelector:
+        "kubernetes.io/os": linux
+      serviceAccountName: portainer-edge-agent-sa
+      containers:
+        - name: portainer-agent
+          image: portainer/agent:2.21.4
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: LOG_LEVEL
+              value: "INFO"
+            # Run in Edge mode: the agent dials OUT to the Portainer Server.
+            - name: EDGE
+              value: "1"
+            - name: EDGE_ID
+              value: "${PORTAINER_EDGE_ID}"
+            - name: EDGE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: portainer-edge-agent-key
+                  key: edge.key
+            # The demo server uses a self-signed certificate; skip verification.
+            # Remove this once the Portainer Server has a trusted certificate.
+            - name: EDGE_INSECURE_POLL
+              value: "1"
+            - name: AGENT_CLUSTER_ADDR
+              value: "portainer-agent-headless"
+            - name: KUBERNETES_POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+          ports:
+            - containerPort: 9001
+              name: http
+            - containerPort: 9001
+              protocol: UDP
+              name: udp
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "250m"
+              memory: "256Mi"
