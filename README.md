@@ -67,8 +67,8 @@ You can deploy it today, on hardware you own, with no subscription fee.
 
 ### What You Can Do That You Couldn't Before
 
-- **Connect a brownfield machine without writing code.** Describe it once in a WoT
-  Thing Description and it appears as a fully-modelled OPC UA server.
+- **Connect a brownfield machine without learning a custom UI and a proprietary asset description language from a connectivity provider.** Describe it once in a WoT
+  Thing Description and it appears as a fully-modelled OPC UA server automatically.
 - **Move your entire data pipeline between clouds — or off the cloud — in an
   afternoon.** Because the wire formats are open standards, the broker, database,
   and dashboards are all replaceable parts, not a platform you're bound to.
