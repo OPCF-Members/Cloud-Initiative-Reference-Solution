@@ -21,18 +21,47 @@ spec:
       nodeSelector:
         "kubernetes.io/os": linux
       initContainers:
+      # The UA Edge Translator image runs as the non-root "app" user (USER app in
+      # its Dockerfile), but the /translator/* hostPath volumes are created by
+      # kubelet as root:root 0755. Without this the server cannot write its OPC UA
+      # application certificate into /app/pki, so the OPC UA listener never starts
+      # on 4840 - while the ASP.NET process stays alive and the pod misleadingly
+      # reports 1/1 Running. Chown by NAME so we do not depend on the numeric UID.
+      - name: init-chown-data
+        image: ghcr.io/opcfoundation/ua-edgetranslator:main
+        imagePullPolicy: IfNotPresent
+        securityContext:
+          runAsUser: 0
+        command: ["/bin/sh", "-c"]
+        args:
+          - |
+            set -e
+            chown -R app:app /app/settings /app/nodesets /app/pki /app/logs
+            echo "Ownership of the translator hostPath volumes fixed"
+        volumeMounts:
+        - name: "settings"
+          mountPath: "/app/settings"
+        - name: "nodesets"
+          mountPath: "/app/nodesets"
+        - name: "pki"
+          mountPath: "/app/pki"
+        - name: "logs"
+          mountPath: "/app/logs"
       # Wait for the simulated Modbus device so the Thing Description can be
-      # onboarded successfully on the very first startup pass.
+      # onboarded successfully on the very first startup pass. The wait is BOUNDED:
+      # the simulator is only a demo asset, so it must never permanently block the
+      # Edge Translator (and, transitively, the Cloud Publisher). If it is not up in
+      # time we start anyway - the translator retries asset connections by itself.
       - name: wait-for-modbus
         image: busybox:1.36
         command: ["/bin/sh", "-c"]
         args:
           - |
-            echo "Waiting for modbus-simulator.munich:502 ..."
-            until nc -z -w 2 modbus-simulator.munich 502; do
-              sleep 5
-            done
-            echo "Modbus simulator is up"
+            echo "Waiting for modbus-simulator.munich:502 (max 300s) ..."
+            timeout 300 sh -c 'until nc -z -w 2 modbus-simulator.munich 502; do sleep 5; done' \
+              && echo "Modbus simulator is up" \
+              || echo "WARNING: modbus-simulator.munich:502 not reachable - starting anyway"
+            exit 0
       # Seed the WoT Thing Description into the settings folder. UA Edge Translator
       # onboards every *.jsonld found there at startup. Copied only when absent so
       # assets added or edited through the UI are preserved across restarts.
@@ -47,6 +76,10 @@ spec:
             else
               echo "modbus-simulator.jsonld already present; leaving existing asset untouched"
             fi
+            # This container runs as root, so anything it just copied is root-owned.
+            # The translator runs as the non-root "app" user (UID/GID 1000 in the
+            # .NET base image) and must be able to rewrite its asset files.
+            chown -R 1000:1000 /app/settings
         volumeMounts:
         - name: "settings"
           mountPath: "/app/settings"
@@ -63,11 +96,27 @@ spec:
           value: "${IOT_PASSWORD}"
         ports:
         - containerPort: 4840
+          name: opcua
         - containerPort: 5000
         - containerPort: 5001
         - containerPort: 19520
         - containerPort: 19521
         - containerPort: 8080
+        # The image ships a Docker HEALTHCHECK against 4840, but Kubernetes ignores
+        # that - without an explicit probe the pod reports Ready while the OPC UA
+        # listener may not be up at all.
+        readinessProbe:
+          tcpSocket:
+            port: opcua
+          initialDelaySeconds: 15
+          periodSeconds: 10
+          failureThreshold: 30
+        livenessProbe:
+          tcpSocket:
+            port: opcua
+          initialDelaySeconds: 120
+          periodSeconds: 30
+          failureThreshold: 5
         volumeMounts:
         - name: "settings"
           mountPath: "/app/settings"
@@ -152,14 +201,19 @@ spec:
         command: ["/bin/sh", "-c"]
         args:
           - |
-            for station in mes assembly test packaging; do
-              echo "Waiting for $station.munich:4840 ..."
-              until nc -z -w 2 "$station.munich" 4840; do
-                sleep 5
-              done
-              echo "$station is up"
-            done
-            echo "Production line 'munich' is ready"
+            # NOTE: deliberately no shell variables here. This manifest is applied
+            # through envsubst, which would replace an unprotected "$station" with
+            # an empty string and leave the pod waiting on ".munich" forever.
+            # The wait is BOUNDED so a missing station cannot block startup forever;
+            # the Publisher retries its OPC UA connections by itself.
+            echo "Waiting for the munich production line (max 300s) ..."
+            timeout 300 sh -c 'until nc -z -w 2 mes.munich 4840 \
+                                  && nc -z -w 2 assembly.munich 4840 \
+                                  && nc -z -w 2 test.munich 4840 \
+                                  && nc -z -w 2 packaging.munich 4840; do sleep 5; done' \
+              && echo "Production line 'munich' is ready" \
+              || echo "WARNING: not all munich stations reachable - starting anyway"
+            exit 0
       # Wait for UA Edge Translator's OPC UA server as well: the persistency file
       # also subscribes to the Modbus asset it maps into OPC UA.
       - name: wait-for-edgetranslator
@@ -167,11 +221,11 @@ spec:
         command: ["/bin/sh", "-c"]
         args:
           - |
-            echo "Waiting for ua-edgetranslator.edge:4840 ..."
-            until nc -z -w 2 ua-edgetranslator.edge 4840; do
-              sleep 5
-            done
-            echo "UA Edge Translator is up"
+            echo "Waiting for ua-edgetranslator.edge:4840 (max 300s) ..."
+            timeout 300 sh -c 'until nc -z -w 2 ua-edgetranslator.edge 4840; do sleep 5; done' \
+              && echo "UA Edge Translator is up" \
+              || echo "WARNING: ua-edgetranslator.edge:4840 not reachable - starting anyway"
+            exit 0
       # Seed the broker connection / metadata configuration and the published-nodes
       # persistency on first start so the "Configuring the Broker Connection and
       # Metadata" UI steps are not needed and data flows immediately.
