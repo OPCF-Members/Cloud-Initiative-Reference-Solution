@@ -94,7 +94,7 @@ spec:
       containers:
         - name: portainer-agent
           image: portainer/agent:2.21.4
-          imagePullPolicy: IfNotPresent
+          imagePullPolicy: Always
           env:
             - name: LOG_LEVEL
               value: "INFO"
