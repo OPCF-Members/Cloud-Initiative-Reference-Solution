@@ -314,6 +314,11 @@ data:
   # the in-cluster Mosquitto broker (TLS, 8883) and enables OPC UA metadata
   # messages. Credentials are substituted from ${IOT_USERNAME}/${IOT_PASSWORD}
   # at apply time (envsubst), matching the rest of the stack.
+  # AllowUntrustedBrokerCertificate is required because Mosquitto uses a
+  # self-signed demo CA generated at deploy time (see gen-certs in cloud.yaml);
+  # this mirrors Telegraf's insecure_skip_verify and UA Cloud Action's
+  # MQTT_TLS_INSECURE. Replace the broker cert with one from a trusted CA and
+  # set this back to false for production.
   settings.json: |
     {
       "PublisherName": "UACloudPublisher",
@@ -325,6 +330,7 @@ data:
       "BrokerMetadataTopic": "metadata",
       "SendUAMetadata": true,
       "UseTLS": true,
+      "AllowUntrustedBrokerCertificate": true,
       "UseKafka": false,
       "CreateBrokerSASToken": false,
       "UseUACertAuth": false,
