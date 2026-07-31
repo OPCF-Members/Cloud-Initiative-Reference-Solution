@@ -382,10 +382,7 @@ Related OPC UA telemetry persistence paths are also mapped as `hostPath` volumes
 ## Simulated Production Line
 
 So that the stack produces meaningful OPC UA telemetry immediately — without any
-physical machines — `edge.yaml` also deploys a **software-only factory
-simulation** taken from the Digital Twin Consortium
-[Manufacturing Ontologies](https://github.com/digitaltwinconsortium/ManufacturingOntologies#production-line-simulation)
-reference solution.
+physical machines — `edge.yaml` also deploys a **software-only factory simulation**.
 
 One production line, named **Munich**, is deployed into its own `munich`
 namespace. It consists of four OPC UA servers:
@@ -410,8 +407,7 @@ implements OPC UA methods (e.g. opening a pressure relief valve) that the
 ### Data Flows Immediately
 
 UA Cloud Publisher is pre-seeded with a **published-nodes persistency file**
-(`persistency.json`, taken from the Manufacturing Ontologies Munich
-configuration) listing the nodes to subscribe to on each station, **plus the
+listing the nodes to subscribe to on each station, **plus the
 Modbus variables that UA Edge Translator maps into OPC UA**. Because the seeded
 `settings.json` sets `AutoLoadPersistedNodes: true`, the Publisher loads this
 list on startup and begins publishing OPC UA PubSub messages to Mosquitto right

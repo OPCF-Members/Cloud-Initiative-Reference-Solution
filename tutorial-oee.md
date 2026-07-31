@@ -41,7 +41,7 @@ Where, over the selected time window:
 - `idealCycleTime` — the station's designed cycle time, in **milliseconds**
   (the Munich simulation runs a **6 s** cycle, so `6000`)
 
-For the **whole line**, Manufacturing Ontologies takes the **minimum** of the
+For the **whole line**, we take the **minimum** of the
 station OEEs — a line can only be as effective as its worst station (the
 bottleneck). The MES is excluded because it produces no pieces.
 

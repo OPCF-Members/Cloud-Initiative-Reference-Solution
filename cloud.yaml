@@ -635,80 +635,13 @@ metadata:
   name: grafana-dashboards
   namespace: cloud
 data:
-  opcua-overview.json: |
-    {
-      "annotations": { "list": [] },
-      "editable": true,
-      "graphTooltip": 0,
-      "schemaVersion": 39,
-      "title": "OPC UA Telemetry Overview",
-      "uid": "opcua-overview",
-      "tags": ["opcua", "iot"],
-      "time": { "from": "now-1h", "to": "now" },
-      "refresh": "10s",
-      "templating": {
-        "list": [
-          {
-            "name": "publisher",
-            "label": "Publisher",
-            "type": "query",
-            "datasource": { "type": "influxdb", "uid": "influxdb" },
-            "includeAll": true,
-            "multi": true,
-            "query": "import \"influxdata/influxdb/schema\"\nschema.tagValues(bucket: \"mqtt\", tag: \"publisher\")"
-          }
-        ]
-      },
-      "panels": [
-        {
-          "id": 1,
-          "title": "opcua_pubsub values",
-          "type": "timeseries",
-          "datasource": { "type": "influxdb", "uid": "influxdb" },
-          "gridPos": { "h": 10, "w": 24, "x": 0, "y": 0 },
-          "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "showPoints": "never" } }, "overrides": [] },
-          "targets": [
-            {
-              "refId": "A",
-              "query": "from(bucket: \"mqtt\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"opcua_pubsub\")\n  |> filter(fn: (r) => contains(value: r.publisher, set: ${publisher:json}))\n  |> filter(fn: (r) => r._value =~ /^-?[0-9.]+$/ or exists r._value)\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)"
-            }
-          ]
-        },
-        {
-          "id": 2,
-          "title": "Ingest rate (points/sec)",
-          "type": "stat",
-          "datasource": { "type": "influxdb", "uid": "influxdb" },
-          "gridPos": { "h": 6, "w": 12, "x": 0, "y": 10 },
-          "targets": [
-            {
-              "refId": "A",
-              "query": "from(bucket: \"mqtt\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"opcua_pubsub\")\n  |> aggregateWindow(every: 1s, fn: count, createEmpty: false)\n  |> mean()"
-            }
-          ]
-        },
-        {
-          "id": 3,
-          "title": "Active dataset writers",
-          "type": "stat",
-          "datasource": { "type": "influxdb", "uid": "influxdb" },
-          "gridPos": { "h": 6, "w": 12, "x": 12, "y": 10 },
-          "targets": [
-            {
-              "refId": "A",
-              "query": "import \"influxdata/influxdb/schema\"\nschema.tagValues(bucket: \"mqtt\", tag: \"datasetWriterId\")\n  |> count()"
-            }
-          ]
-        }
-      ]
-    }
   production-line-oee.json: |
     {
       "annotations": {
         "list": []
       },
       "editable": true,
-      "graphTooltip": 0,
+      "graphTooltip": 1,
       "schemaVersion": 39,
       "title": "Production Line OEE",
       "uid": "production-line-oee",
@@ -718,8 +651,8 @@ data:
         "manufacturing"
       ],
       "time": {
-        "to": "now",
-        "from": "now-6h"
+        "from": "now-6h",
+        "to": "now"
       },
       "refresh": "30s",
       "templating": {
@@ -731,23 +664,24 @@ data:
             "query": "assembly,test,packaging",
             "current": {
               "text": "assembly",
-              "value": "assembly"
+              "value": "assembly",
+              "selected": true
             },
             "options": [
               {
-                "selected": true,
+                "text": "assembly",
                 "value": "assembly",
-                "text": "assembly"
+                "selected": true
               },
               {
-                "selected": false,
+                "text": "test",
                 "value": "test",
-                "text": "test"
+                "selected": false
               },
               {
-                "selected": false,
+                "text": "packaging",
                 "value": "packaging",
-                "text": "packaging"
+                "selected": false
               }
             ],
             "includeAll": false,
@@ -765,46 +699,58 @@ data:
             "uid": "influxdb"
           },
           "gridPos": {
-            "y": 0,
+            "h": 8,
             "w": 8,
             "x": 0,
-            "h": 8
+            "y": 0
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percent",
+              "min": 0,
+              "max": 100,
+              "decimals": 1,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "red",
+                    "value": null
+                  },
+                  {
+                    "color": "orange",
+                    "value": 50
+                  },
+                  {
+                    "color": "green",
+                    "value": 75
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "showThresholdLabels": false,
+            "showThresholdMarkers": true
           },
           "targets": [
             {
-              "query": "import \"strings\"\nimport \"array\"\n\nstation = \"assembly\"\nidealCycleTimeMs = 6000.0\nbucket = \"mqtt\"\n\nstart = v.timeRangeStart\nstop = v.timeRangeStop\n\nidealRunningTimeMs = float(v: int(v: stop) - int(v: start)) / 1000000.0\n\nwriters =\n  from(bucket: bucket)\n\t|\u003e range(start: -30d)\n\t|\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_metadata\")\n\t|\u003e filter(fn: (r) =\u003e strings.containsStr(v: r.metaName, substr: station))\n\t|\u003e keep(columns: [\"datasetWriterId\"])\n\t|\u003e group()\n\t|\u003e distinct(column: \"datasetWriterId\")\n\t|\u003e findColumn(fn: (key) =\u003e true, column: \"_value\")\n\nseries = (field) =\u003e\n  from(bucket: bucket)\n\t|\u003e range(start: start, stop: stop)\n\t|\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_pubsub\" and r._field == field)\n\t|\u003e filter(fn: (r) =\u003e contains(value: r.datasetWriterId, set: writers))\n\t|\u003e toFloat()\n\t|\u003e group()\n\nscalar = (tables=\u003c-, fn) =\u003e (tables |\u003e fn() |\u003e findRecord(fn: (key) =\u003e true, idx: 0))._value\n\nproducedField = \"Payload_NumberOfManufacturedProducts_Value\"\nscrappedField = \"Payload_NumberOfDiscardedProducts_Value\"\n\nproduced = scalar(tables: series(field: producedField), fn: max)\n\t\t - scalar(tables: series(field: producedField), fn: min)\nscrapped = scalar(tables: series(field: scrappedField), fn: max)\n\t\t - scalar(tables: series(field: scrappedField), fn: min)\n\nfaultyMs = scalar(tables: series(field: \"Payload_FaultyTime_Value\"), fn: sum)\n\nrunTimeMs   = idealRunningTimeMs - faultyMs\ntotalPieces = produced + scrapped\n\navailability = if idealRunningTimeMs \u003e 0.0 then runTimeMs / idealRunningTimeMs else 0.0\nperformance  = if runTimeMs \u003e 0.0 and totalPieces \u003e 0.0 then\n\t\t\t\t idealCycleTimeMs * totalPieces / runTimeMs\n\t\t\t   else 0.0\nquality      = if totalPieces \u003e 0.0 then produced / totalPieces else 0.0\n\narray.from(\n  rows: [\n\t{\n\t  _time: stop,\n\t  _field: \"OEE\",\n\t  _value: availability * performance * quality * 100.0,\n\t},\n  ],\n)",
+              "refId": "A",
               "datasource": {
                 "type": "influxdb",
                 "uid": "influxdb"
               },
-              "refId": "A"
+              "query": "import \"strings\"\nimport \"array\"\n\nstation          = \"assembly\"\nidealCycleTimeMs = 6000.0\nbucket           = \"mqtt\"\n\nstart = v.timeRangeStart\nstop  = v.timeRangeStop\n\nidealRunningTimeMs = float(v: int(v: stop) - int(v: start)) / 1000000.0\n\nwriters =\n  from(bucket: bucket)\n\t|\u003e range(start: -30d)\n\t|\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_metadata\")\n\t|\u003e filter(fn: (r) =\u003e strings.containsStr(v: r.metaName, substr: station))\n\t|\u003e keep(columns: [\"datasetWriterId\"])\n\t|\u003e group()\n\t|\u003e distinct(column: \"datasetWriterId\")\n\t|\u003e findColumn(fn: (key) =\u003e true, column: \"_value\")\n\nseries = (field) =\u003e\n  from(bucket: bucket)\n\t|\u003e range(start: start, stop: stop)\n\t|\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_pubsub\" and r._field == field)\n\t|\u003e filter(fn: (r) =\u003e contains(value: r.datasetWriterId, set: writers))\n\t|\u003e map(fn: (r) =\u003e ({r with _value: float(v: r._value)}))\n\t|\u003e group()\n\nscalar = (tables=\u003c-, fn) =\u003e\n  (tables\n\t|\u003e fn()\n\t|\u003e findRecord(fn: (key) =\u003e true, idx: 0))._value\n\nproducedField = \"Payload_NumberOfManufacturedProducts_Value\"\nscrappedField = \"Payload_NumberOfDiscardedProducts_Value\"\n\nproduced = scalar(tables: series(field: producedField), fn: max)\n\t\t - scalar(tables: series(field: producedField), fn: min)\nscrapped = scalar(tables: series(field: scrappedField), fn: max)\n\t\t - scalar(tables: series(field: scrappedField), fn: min)\n\nfaultyMs = scalar(tables: series(field: \"Payload_FaultyTime_Value\"), fn: sum)\n\nrunTimeMs   = idealRunningTimeMs - faultyMs\ntotalPieces = produced + scrapped\n\navailability = if idealRunningTimeMs \u003e 0.0 then runTimeMs / idealRunningTimeMs else 0.0\nperformance  = if runTimeMs \u003e 0.0 and totalPieces \u003e 0.0 then idealCycleTimeMs * totalPieces / runTimeMs else 0.0\nquality      = if totalPieces \u003e 0.0 then produced / totalPieces else 0.0\n\narray.from(rows: [{_time: stop, _field: \"OEE\", _value: availability * performance * quality * 100.0}])\n"
             }
-          ],
-          "fieldConfig": {
-            "defaults": {
-              "min": 0,
-              "thresholds": {
-                "steps": [
-                  {
-                    "value": null,
-                    "color": "red"
-                  },
-                  {
-                    "value": 50,
-                    "color": "orange"
-                  },
-                  {
-                    "value": 75,
-                    "color": "green"
-                  }
-                ],
-                "mode": "absolute"
-              },
-              "unit": "percent",
-              "max": 100
-            },
-            "overrides": []
-          }
+          ]
         },
         {
           "id": 18,
@@ -815,46 +761,58 @@ data:
             "uid": "influxdb"
           },
           "gridPos": {
-            "y": 0,
+            "h": 8,
             "w": 8,
             "x": 8,
-            "h": 8
+            "y": 0
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percent",
+              "min": 0,
+              "max": 100,
+              "decimals": 1,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "red",
+                    "value": null
+                  },
+                  {
+                    "color": "orange",
+                    "value": 50
+                  },
+                  {
+                    "color": "green",
+                    "value": 75
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "showThresholdLabels": false,
+            "showThresholdMarkers": true
           },
           "targets": [
             {
-              "query": "import \"strings\"\nimport \"array\"\n\nstation = \"test\"\nidealCycleTimeMs = 6000.0\nbucket = \"mqtt\"\n\nstart = v.timeRangeStart\nstop = v.timeRangeStop\n\nidealRunningTimeMs = float(v: int(v: stop) - int(v: start)) / 1000000.0\n\nwriters =\n  from(bucket: bucket)\n\t|\u003e range(start: -30d)\n\t|\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_metadata\")\n\t|\u003e filter(fn: (r) =\u003e strings.containsStr(v: r.metaName, substr: station))\n\t|\u003e keep(columns: [\"datasetWriterId\"])\n\t|\u003e group()\n\t|\u003e distinct(column: \"datasetWriterId\")\n\t|\u003e findColumn(fn: (key) =\u003e true, column: \"_value\")\n\nseries = (field) =\u003e\n  from(bucket: bucket)\n\t|\u003e range(start: start, stop: stop)\n\t|\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_pubsub\" and r._field == field)\n\t|\u003e filter(fn: (r) =\u003e contains(value: r.datasetWriterId, set: writers))\n\t|\u003e toFloat()\n\t|\u003e group()\n\nscalar = (tables=\u003c-, fn) =\u003e (tables |\u003e fn() |\u003e findRecord(fn: (key) =\u003e true, idx: 0))._value\n\nproducedField = \"Payload_NumberOfManufacturedProducts_Value\"\nscrappedField = \"Payload_NumberOfDiscardedProducts_Value\"\n\nproduced = scalar(tables: series(field: producedField), fn: max)\n\t\t - scalar(tables: series(field: producedField), fn: min)\nscrapped = scalar(tables: series(field: scrappedField), fn: max)\n\t\t - scalar(tables: series(field: scrappedField), fn: min)\n\nfaultyMs = scalar(tables: series(field: \"Payload_FaultyTime_Value\"), fn: sum)\n\nrunTimeMs   = idealRunningTimeMs - faultyMs\ntotalPieces = produced + scrapped\n\navailability = if idealRunningTimeMs \u003e 0.0 then runTimeMs / idealRunningTimeMs else 0.0\nperformance  = if runTimeMs \u003e 0.0 and totalPieces \u003e 0.0 then\n\t\t\t\t idealCycleTimeMs * totalPieces / runTimeMs\n\t\t\t   else 0.0\nquality      = if totalPieces \u003e 0.0 then produced / totalPieces else 0.0\n\narray.from(\n  rows: [\n\t{\n\t  _time: stop,\n\t  _field: \"OEE\",\n\t  _value: availability * performance * quality * 100.0,\n\t},\n  ],\n)",
+              "refId": "A",
               "datasource": {
                 "type": "influxdb",
                 "uid": "influxdb"
               },
-              "refId": "A"
+              "query": "import \"strings\"\nimport \"array\"\n\nstation          = \"test\"\nidealCycleTimeMs = 6000.0\nbucket           = \"mqtt\"\n\nstart = v.timeRangeStart\nstop  = v.timeRangeStop\n\nidealRunningTimeMs = float(v: int(v: stop) - int(v: start)) / 1000000.0\n\nwriters =\n  from(bucket: bucket)\n\t|\u003e range(start: -30d)\n\t|\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_metadata\")\n\t|\u003e filter(fn: (r) =\u003e strings.containsStr(v: r.metaName, substr: station))\n\t|\u003e keep(columns: [\"datasetWriterId\"])\n\t|\u003e group()\n\t|\u003e distinct(column: \"datasetWriterId\")\n\t|\u003e findColumn(fn: (key) =\u003e true, column: \"_value\")\n\nseries = (field) =\u003e\n  from(bucket: bucket)\n\t|\u003e range(start: start, stop: stop)\n\t|\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_pubsub\" and r._field == field)\n\t|\u003e filter(fn: (r) =\u003e contains(value: r.datasetWriterId, set: writers))\n\t|\u003e map(fn: (r) =\u003e ({r with _value: float(v: r._value)}))\n\t|\u003e group()\n\nscalar = (tables=\u003c-, fn) =\u003e\n  (tables\n\t|\u003e fn()\n\t|\u003e findRecord(fn: (key) =\u003e true, idx: 0))._value\n\nproducedField = \"Payload_NumberOfManufacturedProducts_Value\"\nscrappedField = \"Payload_NumberOfDiscardedProducts_Value\"\n\nproduced = scalar(tables: series(field: producedField), fn: max)\n\t\t - scalar(tables: series(field: producedField), fn: min)\nscrapped = scalar(tables: series(field: scrappedField), fn: max)\n\t\t - scalar(tables: series(field: scrappedField), fn: min)\n\nfaultyMs = scalar(tables: series(field: \"Payload_FaultyTime_Value\"), fn: sum)\n\nrunTimeMs   = idealRunningTimeMs - faultyMs\ntotalPieces = produced + scrapped\n\navailability = if idealRunningTimeMs \u003e 0.0 then runTimeMs / idealRunningTimeMs else 0.0\nperformance  = if runTimeMs \u003e 0.0 and totalPieces \u003e 0.0 then idealCycleTimeMs * totalPieces / runTimeMs else 0.0\nquality      = if totalPieces \u003e 0.0 then produced / totalPieces else 0.0\n\narray.from(rows: [{_time: stop, _field: \"OEE\", _value: availability * performance * quality * 100.0}])\n"
             }
-          ],
-          "fieldConfig": {
-            "defaults": {
-              "min": 0,
-              "thresholds": {
-                "steps": [
-                  {
-                    "value": null,
-                    "color": "red"
-                  },
-                  {
-                    "value": 50,
-                    "color": "orange"
-                  },
-                  {
-                    "value": 75,
-                    "color": "green"
-                  }
-                ],
-                "mode": "absolute"
-              },
-              "unit": "percent",
-              "max": 100
-            },
-            "overrides": []
-          }
+          ]
         },
         {
           "id": 26,
@@ -865,46 +823,58 @@ data:
             "uid": "influxdb"
           },
           "gridPos": {
-            "y": 0,
+            "h": 8,
             "w": 8,
             "x": 16,
-            "h": 8
+            "y": 0
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percent",
+              "min": 0,
+              "max": 100,
+              "decimals": 1,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "red",
+                    "value": null
+                  },
+                  {
+                    "color": "orange",
+                    "value": 50
+                  },
+                  {
+                    "color": "green",
+                    "value": 75
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "showThresholdLabels": false,
+            "showThresholdMarkers": true
           },
           "targets": [
             {
-              "query": "import \"strings\"\nimport \"array\"\n\nstation = \"packaging\"\nidealCycleTimeMs = 6000.0\nbucket = \"mqtt\"\n\nstart = v.timeRangeStart\nstop = v.timeRangeStop\n\nidealRunningTimeMs = float(v: int(v: stop) - int(v: start)) / 1000000.0\n\nwriters =\n  from(bucket: bucket)\n\t|\u003e range(start: -30d)\n\t|\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_metadata\")\n\t|\u003e filter(fn: (r) =\u003e strings.containsStr(v: r.metaName, substr: station))\n\t|\u003e keep(columns: [\"datasetWriterId\"])\n\t|\u003e group()\n\t|\u003e distinct(column: \"datasetWriterId\")\n\t|\u003e findColumn(fn: (key) =\u003e true, column: \"_value\")\n\nseries = (field) =\u003e\n  from(bucket: bucket)\n\t|\u003e range(start: start, stop: stop)\n\t|\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_pubsub\" and r._field == field)\n\t|\u003e filter(fn: (r) =\u003e contains(value: r.datasetWriterId, set: writers))\n\t|\u003e toFloat()\n\t|\u003e group()\n\nscalar = (tables=\u003c-, fn) =\u003e (tables |\u003e fn() |\u003e findRecord(fn: (key) =\u003e true, idx: 0))._value\n\nproducedField = \"Payload_NumberOfManufacturedProducts_Value\"\nscrappedField = \"Payload_NumberOfDiscardedProducts_Value\"\n\nproduced = scalar(tables: series(field: producedField), fn: max)\n\t\t - scalar(tables: series(field: producedField), fn: min)\nscrapped = scalar(tables: series(field: scrappedField), fn: max)\n\t\t - scalar(tables: series(field: scrappedField), fn: min)\n\nfaultyMs = scalar(tables: series(field: \"Payload_FaultyTime_Value\"), fn: sum)\n\nrunTimeMs   = idealRunningTimeMs - faultyMs\ntotalPieces = produced + scrapped\n\navailability = if idealRunningTimeMs \u003e 0.0 then runTimeMs / idealRunningTimeMs else 0.0\nperformance  = if runTimeMs \u003e 0.0 and totalPieces \u003e 0.0 then\n\t\t\t\t idealCycleTimeMs * totalPieces / runTimeMs\n\t\t\t   else 0.0\nquality      = if totalPieces \u003e 0.0 then produced / totalPieces else 0.0\n\narray.from(\n  rows: [\n\t{\n\t  _time: stop,\n\t  _field: \"OEE\",\n\t  _value: availability * performance * quality * 100.0,\n\t},\n  ],\n)",
+              "refId": "A",
               "datasource": {
                 "type": "influxdb",
                 "uid": "influxdb"
               },
-              "refId": "A"
+              "query": "import \"strings\"\nimport \"array\"\n\nstation          = \"packaging\"\nidealCycleTimeMs = 6000.0\nbucket           = \"mqtt\"\n\nstart = v.timeRangeStart\nstop  = v.timeRangeStop\n\nidealRunningTimeMs = float(v: int(v: stop) - int(v: start)) / 1000000.0\n\nwriters =\n  from(bucket: bucket)\n\t|\u003e range(start: -30d)\n\t|\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_metadata\")\n\t|\u003e filter(fn: (r) =\u003e strings.containsStr(v: r.metaName, substr: station))\n\t|\u003e keep(columns: [\"datasetWriterId\"])\n\t|\u003e group()\n\t|\u003e distinct(column: \"datasetWriterId\")\n\t|\u003e findColumn(fn: (key) =\u003e true, column: \"_value\")\n\nseries = (field) =\u003e\n  from(bucket: bucket)\n\t|\u003e range(start: start, stop: stop)\n\t|\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_pubsub\" and r._field == field)\n\t|\u003e filter(fn: (r) =\u003e contains(value: r.datasetWriterId, set: writers))\n\t|\u003e map(fn: (r) =\u003e ({r with _value: float(v: r._value)}))\n\t|\u003e group()\n\nscalar = (tables=\u003c-, fn) =\u003e\n  (tables\n\t|\u003e fn()\n\t|\u003e findRecord(fn: (key) =\u003e true, idx: 0))._value\n\nproducedField = \"Payload_NumberOfManufacturedProducts_Value\"\nscrappedField = \"Payload_NumberOfDiscardedProducts_Value\"\n\nproduced = scalar(tables: series(field: producedField), fn: max)\n\t\t - scalar(tables: series(field: producedField), fn: min)\nscrapped = scalar(tables: series(field: scrappedField), fn: max)\n\t\t - scalar(tables: series(field: scrappedField), fn: min)\n\nfaultyMs = scalar(tables: series(field: \"Payload_FaultyTime_Value\"), fn: sum)\n\nrunTimeMs   = idealRunningTimeMs - faultyMs\ntotalPieces = produced + scrapped\n\navailability = if idealRunningTimeMs \u003e 0.0 then runTimeMs / idealRunningTimeMs else 0.0\nperformance  = if runTimeMs \u003e 0.0 and totalPieces \u003e 0.0 then idealCycleTimeMs * totalPieces / runTimeMs else 0.0\nquality      = if totalPieces \u003e 0.0 then produced / totalPieces else 0.0\n\narray.from(rows: [{_time: stop, _field: \"OEE\", _value: availability * performance * quality * 100.0}])\n"
             }
-          ],
-          "fieldConfig": {
-            "defaults": {
-              "min": 0,
-              "thresholds": {
-                "steps": [
-                  {
-                    "value": null,
-                    "color": "red"
-                  },
-                  {
-                    "value": 50,
-                    "color": "orange"
-                  },
-                  {
-                    "value": 75,
-                    "color": "green"
-                  }
-                ],
-                "mode": "absolute"
-              },
-              "unit": "percent",
-              "max": 100
-            },
-            "overrides": []
-          }
+          ]
         },
         {
           "id": 20,
@@ -915,19 +885,48 @@ data:
             "uid": "influxdb"
           },
           "gridPos": {
-            "y": 8,
+            "h": 9,
             "w": 12,
             "x": 0,
-            "h": 9
+            "y": 8
+          },
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "drawStyle": "line",
+                "lineInterpolation": "linear",
+                "lineWidth": 2,
+                "fillOpacity": 10,
+                "showPoints": "never",
+                "pointSize": 5,
+                "spanNulls": true,
+                "gradientMode": "none",
+                "axisPlacement": "auto",
+                "axisSoftMin": 0
+              },
+              "unit": "short"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "none"
+            }
           },
           "targets": [
             {
-              "query": "import \"strings\"\n\nstation = \"${station}\"\n\nwriters =\n from(bucket: \"mqtt\")\n\t|\u003e range(start: -30d)\n\t|\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_metadata\")\n\t|\u003e filter(fn: (r) =\u003e strings.containsStr(v: r.metaName, substr: station))\n\t|\u003e keep(columns: [\"datasetWriterId\"])\n\t|\u003e group()\n\t|\u003e distinct(column: \"datasetWriterId\")\n\t|\u003e findColumn(fn: (key) =\u003e true, column: \"_value\")\n\nfrom(bucket: \"mqtt\")\n  |\u003e range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_pubsub\" and r._field == \"Payload_NumberOfManufacturedProducts_Value\")\n  |\u003e filter(fn: (r) =\u003e contains(value: r.datasetWriterId, set: writers))\n  |\u003e toFloat()\n  |\u003e aggregateWindow(every: v.windowPeriod, fn: last, createEmpty: false)",
+              "refId": "A",
               "datasource": {
                 "type": "influxdb",
                 "uid": "influxdb"
               },
-              "refId": "A"
+              "query": "import \"strings\"\n\nstation = \"${station}\"\n\nwriters =\n  from(bucket: \"mqtt\")\n\t|\u003e range(start: -30d)\n\t|\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_metadata\")\n\t|\u003e filter(fn: (r) =\u003e strings.containsStr(v: r.metaName, substr: station))\n\t|\u003e keep(columns: [\"datasetWriterId\"])\n\t|\u003e group()\n\t|\u003e distinct(column: \"datasetWriterId\")\n\t|\u003e findColumn(fn: (key) =\u003e true, column: \"_value\")\n\nfrom(bucket: \"mqtt\")\n  |\u003e range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_pubsub\" and r._field == \"Payload_NumberOfManufacturedProducts_Value\")\n  |\u003e filter(fn: (r) =\u003e contains(value: r.datasetWriterId, set: writers))\n  |\u003e map(fn: (r) =\u003e ({r with _value: float(v: r._value)}))\n  |\u003e group()\n  |\u003e aggregateWindow(every: v.windowPeriod, fn: last, createEmpty: false)\n  |\u003e keep(columns: [\"_time\", \"_value\"])\n  |\u003e set(key: \"_field\", value: \"manufactured\")\n"
             }
           ]
         },
@@ -940,19 +939,48 @@ data:
             "uid": "influxdb"
           },
           "gridPos": {
-            "y": 8,
+            "h": 9,
             "w": 12,
             "x": 12,
-            "h": 9
+            "y": 8
+          },
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "drawStyle": "line",
+                "lineInterpolation": "linear",
+                "lineWidth": 2,
+                "fillOpacity": 10,
+                "showPoints": "never",
+                "pointSize": 5,
+                "spanNulls": true,
+                "gradientMode": "none",
+                "axisPlacement": "auto",
+                "axisSoftMin": 0
+              },
+              "unit": "short"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "none"
+            }
           },
           "targets": [
             {
-              "query": "import \"strings\"\n\nstation = \"${station}\"\n\nwriters =\n from(bucket: \"mqtt\")\n\t|\u003e range(start: -30d)\n\t|\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_metadata\")\n\t|\u003e filter(fn: (r) =\u003e strings.containsStr(v: r.metaName, substr: station))\n\t|\u003e keep(columns: [\"datasetWriterId\"])\n\t|\u003e group()\n\t|\u003e distinct(column: \"datasetWriterId\")\n\t|\u003e findColumn(fn: (key) =\u003e true, column: \"_value\")\n\nfrom(bucket: \"mqtt\")\n  |\u003e range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_pubsub\" and r._field == \"Payload_NumberOfDiscardedProducts_Value\")\n  |\u003e filter(fn: (r) =\u003e contains(value: r.datasetWriterId, set: writers))\n  |\u003e toFloat()\n  |\u003e aggregateWindow(every: v.windowPeriod, fn: last, createEmpty: false)",
+              "refId": "A",
               "datasource": {
                 "type": "influxdb",
                 "uid": "influxdb"
               },
-              "refId": "A"
+              "query": "import \"strings\"\n\nstation = \"${station}\"\n\nwriters =\n  from(bucket: \"mqtt\")\n\t|\u003e range(start: -30d)\n\t|\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_metadata\")\n\t|\u003e filter(fn: (r) =\u003e strings.containsStr(v: r.metaName, substr: station))\n\t|\u003e keep(columns: [\"datasetWriterId\"])\n\t|\u003e group()\n\t|\u003e distinct(column: \"datasetWriterId\")\n\t|\u003e findColumn(fn: (key) =\u003e true, column: \"_value\")\n\nfrom(bucket: \"mqtt\")\n  |\u003e range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_pubsub\" and r._field == \"Payload_NumberOfDiscardedProducts_Value\")\n  |\u003e filter(fn: (r) =\u003e contains(value: r.datasetWriterId, set: writers))\n  |\u003e map(fn: (r) =\u003e ({r with _value: float(v: r._value)}))\n  |\u003e group()\n  |\u003e aggregateWindow(every: v.windowPeriod, fn: last, createEmpty: false)\n  |\u003e keep(columns: [\"_time\", \"_value\"])\n  |\u003e set(key: \"_field\", value: \"discarded\")\n"
             }
           ]
         },
@@ -965,27 +993,50 @@ data:
             "uid": "influxdb"
           },
           "gridPos": {
-            "y": 17,
+            "h": 9,
             "w": 12,
             "x": 0,
-            "h": 9
+            "y": 17
+          },
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "drawStyle": "line",
+                "lineInterpolation": "linear",
+                "lineWidth": 2,
+                "fillOpacity": 10,
+                "showPoints": "never",
+                "pointSize": 5,
+                "spanNulls": true,
+                "gradientMode": "none",
+                "axisPlacement": "auto",
+                "axisSoftMin": 0
+              },
+              "unit": "kwatth"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "none"
+            }
           },
           "targets": [
             {
-              "query": "import \"strings\"\n\nstation = \"${station}\"\n\nwriters =\n from(bucket: \"mqtt\")\n\t|\u003e range(start: -30d)\n\t|\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_metadata\")\n\t|\u003e filter(fn: (r) =\u003e strings.containsStr(v: r.metaName, substr: station))\n\t|\u003e keep(columns: [\"datasetWriterId\"])\n\t|\u003e group()\n\t|\u003e distinct(column: \"datasetWriterId\")\n\t|\u003e findColumn(fn: (key) =\u003e true, column: \"_value\")\n\nfrom(bucket: \"mqtt\")\n  |\u003e range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_pubsub\" and r._field == \"Payload_EnergyConsumption_Value\")\n  |\u003e filter(fn: (r) =\u003e contains(value: r.datasetWriterId, set: writers))\n  |\u003e toFloat()\n  |\u003e aggregateWindow(every: v.windowPeriod, fn: last, createEmpty: false)",
+              "refId": "A",
               "datasource": {
                 "type": "influxdb",
                 "uid": "influxdb"
               },
-              "refId": "A"
+              "query": "import \"strings\"\n\nstation = \"${station}\"\n\nwriters =\n  from(bucket: \"mqtt\")\n\t|\u003e range(start: -30d)\n\t|\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_metadata\")\n\t|\u003e filter(fn: (r) =\u003e strings.containsStr(v: r.metaName, substr: station))\n\t|\u003e keep(columns: [\"datasetWriterId\"])\n\t|\u003e group()\n\t|\u003e distinct(column: \"datasetWriterId\")\n\t|\u003e findColumn(fn: (key) =\u003e true, column: \"_value\")\n\nfrom(bucket: \"mqtt\")\n  |\u003e range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_pubsub\" and r._field == \"Payload_EnergyConsumption_Value\")\n  |\u003e filter(fn: (r) =\u003e contains(value: r.datasetWriterId, set: writers))\n  |\u003e map(fn: (r) =\u003e ({r with _value: float(v: r._value)}))\n  |\u003e group()\n  |\u003e aggregateWindow(every: v.windowPeriod, fn: last, createEmpty: false)\n  |\u003e keep(columns: [\"_time\", \"_value\"])\n  |\u003e set(key: \"_field\", value: \"kWh\")\n"
             }
-          ],
-          "fieldConfig": {
-            "defaults": {
-              "unit": "kwatth"
-            },
-            "overrides": []
-          }
+          ]
         },
         {
           "id": 31,
@@ -996,19 +1047,48 @@ data:
             "uid": "influxdb"
           },
           "gridPos": {
-            "y": 17,
+            "h": 9,
             "w": 12,
             "x": 12,
-            "h": 9
+            "y": 17
+          },
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "drawStyle": "line",
+                "lineInterpolation": "linear",
+                "lineWidth": 2,
+                "fillOpacity": 10,
+                "showPoints": "never",
+                "pointSize": 5,
+                "spanNulls": true,
+                "gradientMode": "none",
+                "axisPlacement": "auto",
+                "axisSoftMin": 0
+              },
+              "unit": "pressurembar"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "none"
+            }
           },
           "targets": [
             {
-              "query": "import \"strings\"\n\nstation = \"${station}\"\n\nwriters =\n from(bucket: \"mqtt\")\n\t|\u003e range(start: -30d)\n\t|\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_metadata\")\n\t|\u003e filter(fn: (r) =\u003e strings.containsStr(v: r.metaName, substr: station))\n\t|\u003e keep(columns: [\"datasetWriterId\"])\n\t|\u003e group()\n\t|\u003e distinct(column: \"datasetWriterId\")\n\t|\u003e findColumn(fn: (key) =\u003e true, column: \"_value\")\n\nfrom(bucket: \"mqtt\")\n  |\u003e range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_pubsub\" and r._field == \"Payload_Pressure_Value\")\n  |\u003e filter(fn: (r) =\u003e contains(value: r.datasetWriterId, set: writers))\n  |\u003e toFloat()\n  |\u003e aggregateWindow(every: v.windowPeriod, fn: last, createEmpty: false)",
+              "refId": "A",
               "datasource": {
                 "type": "influxdb",
                 "uid": "influxdb"
               },
-              "refId": "A"
+              "query": "import \"strings\"\n\nstation = \"${station}\"\n\nwriters =\n  from(bucket: \"mqtt\")\n\t|\u003e range(start: -30d)\n\t|\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_metadata\")\n\t|\u003e filter(fn: (r) =\u003e strings.containsStr(v: r.metaName, substr: station))\n\t|\u003e keep(columns: [\"datasetWriterId\"])\n\t|\u003e group()\n\t|\u003e distinct(column: \"datasetWriterId\")\n\t|\u003e findColumn(fn: (key) =\u003e true, column: \"_value\")\n\nfrom(bucket: \"mqtt\")\n  |\u003e range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_pubsub\" and r._field == \"Payload_Pressure_Value\")\n  |\u003e filter(fn: (r) =\u003e contains(value: r.datasetWriterId, set: writers))\n  |\u003e map(fn: (r) =\u003e ({r with _value: float(v: r._value)}))\n  |\u003e group()\n  |\u003e aggregateWindow(every: v.windowPeriod, fn: last, createEmpty: false)\n  |\u003e keep(columns: [\"_time\", \"_value\"])\n  |\u003e set(key: \"_field\", value: \"pressure\")\n"
             }
           ]
         }
@@ -1056,6 +1136,11 @@ spec:
               value: "${IOT_USERNAME}"
             - name: GF_SECURITY_ADMIN_PASSWORD
               value: "${IOT_PASSWORD}"
+            # Land on the OEE dashboard instead of the empty Grafana home page.
+            # The path is the one the file provisioner serves it from; the uid in
+            # the dashboard JSON is "production-line-oee".
+            - name: GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH
+              value: "/var/lib/grafana/dashboards/production-line-oee.json"
             # Consumed by the provisioned datasource (token interpolation)
             - name: INFLUX_TOKEN
               valueFrom:
