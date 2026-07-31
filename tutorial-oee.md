@@ -103,6 +103,19 @@ You should see fields such as `Payload_NumberOfManufacturedProducts_Value` and
 metadata names containing `assembly`, `test`, `packaging`, and `mes`. If your
 names differ, adjust the constants at the top of the queries below.
 
+> **The field list also contains UA Cloud Publisher's own diagnostics** —
+> `Payload_SentMessages_Value`, `Payload_ConnectedToBroker_Value`,
+> `Payload_QueueCount_Value` and similar. Those describe the publisher, not a
+> machine, and are published because `SendDiagnosticsMessages` is enabled in its
+> settings. Ignore them here.
+
+> **A counter you never see may simply not have changed.** OPC UA only reports
+> values that change, so if the line is idle, `NumberOfManufacturedProducts` and
+> `NumberOfDiscardedProducts` stay at their initial value and never appear as
+> fields. If they are missing, check the line is actually producing:
+> `kubectl logs -n munich deployment/mes --tail=20` should show cycles running
+> rather than `Assembly line is still in provisioning mode`.
+
 ## Step 2: OEE for a Single Station
 
 This returns **Availability, Performance, Quality and OEE** (as percentages) for
@@ -289,9 +302,16 @@ the smallest of the three:
 
 ## Step 5: Visualise It in Grafana
 
-Open Grafana at `http://<device-ip>:3000` (see
-[Dashboards with Grafana](./tutorial-grafana-dashboards.md)) and create a new
-dashboard using the pre-provisioned **InfluxDB** data source.
+The stack already ships a provisioned **Production Line OEE** dashboard
+(`cloud.yaml` → `grafana-dashboards` ConfigMap) that implements exactly this
+calculation: an OEE gauge per station plus manufactured/discarded, energy and
+pressure trends. Open Grafana at `http://<device-ip>:3000` (see
+[Dashboards with Grafana](./tutorial-grafana-dashboards.md)) and look for it in
+the dashboard list — there is nothing to build by hand.
+
+The rest of this step is for when you want to **extend** it or build your own
+panels using the queries above, against the pre-provisioned **InfluxDB** data
+source.
 
 Suggested panels:
 
