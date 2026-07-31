@@ -8,11 +8,64 @@ that query data using the **Flux** language.
    **Dashboards → Create Dashboard → Add Cell** to pin a query to a dashboard.
 3. Data written by Telegraf lands in the **`mqtt`** bucket under the measurements
    **`opcua_pubsub`** (live values) and **`opcua_metadata`** (schema/metadata).
+4. Switch the view to `Table` to be able to quickly interpret query results.
 
-**Example Flux query** (paste into a Data Explorer / dashboard cell in
-**Script Editor** mode). This joins the live `opcua_pubsub` data with the
-`opcua_metadata` schema on `datasetWriterId` so each series is labelled with its
-human-readable metadata name:
+**Start simple and build up.** The join below is the end goal, but if it returns
+nothing, work through these steps first — each one narrows down where the data
+stops.
+
+### Step 1: Is anything in the bucket at all?
+
+```flux
+from(bucket: "mqtt")
+  |> range(start: -1h)
+  |> filter(fn: (r) => r._measurement == "opcua_pubsub")
+  |> limit(n: 10)
+```
+
+No rows means the problem is upstream of InfluxDB — check
+`kubectl logs -n cloud deployment/telegraf` and confirm the Publisher is
+connected to the broker.
+
+### Step 2: Which field names actually exist?
+
+This is the step that most often explains an empty result — field names are
+derived from your OPC UA node names, so they differ per deployment:
+
+```flux
+from(bucket: "mqtt")
+  |> range(start: -1h)
+  |> filter(fn: (r) => r._measurement == "opcua_pubsub")
+  |> keep(columns: ["_field"])
+  |> group()
+  |> distinct(column: "_field")
+```
+
+For the simulated Munich line you should see names such as
+`Payload_NumberOfManufacturedProducts_Value`, `Payload_NumberOfDiscardedProducts_Value`
+and `Payload_FaultyTime_Value`; the Modbus asset adds `Payload_Temperature_Value`,
+`Payload_Pressure_Value`, `Payload_MotorSpeed_Value` and so on. Pick one from
+**your** list for the next step.
+
+### Step 3: Query that one field
+
+```flux
+from(bucket: "mqtt")
+  |> range(start: -1h)
+  |> filter(fn: (r) =>
+    r._measurement == "opcua_pubsub" and
+    r._field == "Payload_Pressure_Value"      // ← replace with a name from Step 2
+  )
+```
+
+If Step 2 listed the field but this returns nothing, widen the time range —
+`v.timeRangeStart` follows the dashboard's selector, which may be narrower than
+the data you have.
+
+### Step 4: Join with the metadata for human-readable labels
+
+Once Step 3 returns rows, add the metadata join. It labels each series with its
+`metaName` by matching on `datasetWriterId`:
 
 ```flux
 data =
@@ -20,7 +73,7 @@ data =
     |> range(start: v.timeRangeStart, stop: v.timeRangeStop)
     |> filter(fn: (r) =>
       r._measurement == "opcua_pubsub" and
-      r._field == "Payload_VoltageL-N_Value_C"
+      r._field == "Payload_Pressure_Value"    // ← replace with a name from Step 2
     )
     |> keep(columns: ["_time", "_value", "datasetWriterId"])
     |> group(columns: ["datasetWriterId"])
@@ -46,6 +99,23 @@ join(tables: {d: data, m: meta}, on: ["datasetWriterId"], method: "inner")
       _tagName: r.metaName
   }))
 ```
+
+> **If the join returns nothing but Step 3 worked**, the two halves have no
+> `datasetWriterId` in common. Metadata is only republished every
+> `MetadataSendInterval` seconds (300 by default), so shortly after an InfluxDB restart the
+> `opcua_metadata` measurement may not yet contain an entry for the writer you are
+> querying. Either wait for the next metadata publish or widen the `meta` range.
+> You can check both sides with:
+>
+> ```flux
+> from(bucket: "mqtt")
+>   |> range(start: -30d)
+>   |> filter(fn: (r) => r._measurement == "opcua_metadata")
+>   |> keep(columns: ["datasetWriterId", "metaName"])
+>   |> group()
+>   |> distinct(column: "datasetWriterId")
+> ```
+
 
 > **Tip:** Use the Data Explorer's visual **Query Builder** to discover the exact
 > `_field` names available (they mirror the OPC UA PubSub payload keys, e.g.
