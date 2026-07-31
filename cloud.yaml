@@ -1727,6 +1727,11 @@ spec:
           value: "mqtt"
         - name: INFLUX_MEASUREMENT
           value: "opcua_pubsub"
+        # Metadata measurement written by the second Telegraf mqtt_consumer input.
+        # Browse joins it to INFLUX_MEASUREMENT on the "datasetWriterId" tag to
+        # resolve each tag's OPC UA namespace URI from its "metaName" value.
+        - name: INFLUX_METADATA_MEASUREMENT
+          value: "opcua_metadata"
         # Field to evaluate and threshold that triggers the OPC UA method call.
         # Adjust INFLUX_FIELD to match a numeric field your assets publish.
         - name: INFLUX_FIELD
