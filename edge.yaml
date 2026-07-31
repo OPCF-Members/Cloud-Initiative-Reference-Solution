@@ -388,6 +388,14 @@ data:
   # Published-nodes persistency seeded so the Publisher immediately subscribes to
   # the simulated Munich production line stations (auto-loaded because
   # AutoLoadPersistedNodes is true above).
+  #
+  # The production line stations accept anonymous sessions for reading, but the
+  # UA Edge Translator requires a user token for its node subscriptions, so that
+  # endpoint uses UsernamePassword with the shared IOT credentials. Note the
+  # Publisher stores this password encrypted with its issuer certificate when it is
+  # written from the UI, but on load DecryptString() falls back to using the value
+  # verbatim when it is not valid Base64 - which is what makes a seeded plaintext
+  # password work here.
   persistency.json: |
     [
       {
@@ -710,7 +718,9 @@ data:
           }
         ],
         "OpcEvents": [],
-        "OpcAuthenticationMode": "Anonymous"
+        "OpcAuthenticationMode": "UsernamePassword",
+        "UserName": "${IOT_USERNAME}",
+        "Password": "${IOT_PASSWORD}"
       }
     ]
 ---
