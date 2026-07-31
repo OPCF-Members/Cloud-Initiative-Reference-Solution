@@ -378,7 +378,7 @@ data:
       "DefaultOpcPublishingInterval": 1000,
       "UAStackTraceMask": 645,
       "ReversiblePubSubEncoding": false,
-      "OmitNetworkMessageHeader": true,
+      "OmitNetworkMessageHeader": false,
       "UseCloudEventsMetadataHeader": false,
       "AutoLoadPersistedNodes": true,
       "AzureOpenAIAPIEndpoint": null,
