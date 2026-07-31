@@ -396,6 +396,14 @@ data:
   # written from the UI, but on load DecryptString() falls back to using the value
   # verbatim when it is not valid Base64 - which is what makes a seeded plaintext
   # password work here.
+  #
+  # UA Cloud Commander is listed as well. It is itself an OPC UA server
+  # (Opc.Ua.Cloud.Commander.UAServer derives from StandardServer) but exposes no
+  # custom address space, so the only node subscribed is the standard
+  # Server_ServerStatus_State (i=2259) - a liveness signal. The real purpose of the
+  # entry is to make the Publisher include it in the GDS Server Push loop, which
+  # only iterates the endpoints found in this file, so the Commander gets a
+  # CA-issued certificate and issuer list like every other server in the stack.
   persistency.json: |
     [
       {
@@ -721,6 +729,22 @@ data:
         "OpcAuthenticationMode": "UsernamePassword",
         "UserName": "${IOT_USERNAME}",
         "Password": "${IOT_PASSWORD}"
+      },
+      {
+        "EndpointUrl": "opc.tcp://ua-cloudcommander.edge.svc.cluster.local:4840",
+        "OpcNodes": [
+          {
+            "Id": "i=2259",
+            "OpcSamplingInterval": 5000,
+            "OpcPublishingInterval": 10000,
+            "HeartbeatInterval": 0,
+            "SkipFirst": false
+          }
+        ],
+        "OpcEvents": [],
+        "OpcAuthenticationMode": "UsernamePassword",
+        "UserName": "${IOT_USERNAME}",
+        "Password": "${IOT_PASSWORD}"
       }
     ]
 ---
@@ -792,6 +816,20 @@ spec:
           value: "${IOT_USERNAME}"
         - name: UA_PASSWORD
           value: "${IOT_PASSWORD}"
+        # Credentials for UA Cloud Commander's OWN OPC UA server. Its
+        # VerifyPassword() compares the presented user token against these two
+        # variables and maps a match to SystemConfigurationIdentity (SecurityAdmin),
+        # which is what the Publisher's GDS Server Push requires. Without them every
+        # push is rejected with BadUserAccessDenied.
+        - name: OPCUA_USERNAME
+          value: "${IOT_USERNAME}"
+        - name: OPCUA_PASSWORD
+          value: "${IOT_PASSWORD}"
+        ports:
+        # UA Cloud Commander is itself an OPC UA server (StandardServer), so it can be
+        # provisioned by GDS Server Push like any other server in the stack.
+        - containerPort: 4840
+          name: opcua
         volumeMounts:
         - name: "pki"
           mountPath: "/app/pki"
@@ -804,6 +842,19 @@ spec:
         - name: "logs"
           hostPath:
             path: "/commander/logs"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ua-cloudcommander
+  namespace: edge
+spec:
+  ports:
+  - name: opcua
+    targetPort: 4840
+    port: 4840
+  selector:
+    app: ua-cloudcommander
 ---
 # ---------------------------------------------------------------------------
 # Simulated production line "Munich"
