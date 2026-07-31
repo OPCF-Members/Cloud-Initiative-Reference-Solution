@@ -289,7 +289,16 @@ spec:
           args:
             - |
               set -e
+              # Generate the password file, then hand it to the uid the broker drops
+              # privileges to. mosquitto.conf has no "user" directive, so Mosquitto 2.0
+              # switches to the "mosquitto" user (uid/gid 1883) AFTER reading the config
+              # and re-opens password_file as that user. mosquitto_passwd creates the
+              # file 0600 owned by whoever runs this script, so without the chown/chmod
+              # below the broker fails with:
+              #   Error: Unable to open pwfile "/mosquitto/data/passwd".
               mosquitto_passwd -b -c /mosquitto/data/passwd "$MOSQUITTO_USERNAME" "$MOSQUITTO_PASSWORD"
+              chown 1883:1883 /mosquitto/data/passwd || true
+              chmod 0640 /mosquitto/data/passwd
               exec /usr/sbin/mosquitto -c /mosquitto/config/mosquitto.conf
           ports:
             - containerPort: 8883
