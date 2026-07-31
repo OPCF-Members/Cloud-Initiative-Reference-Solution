@@ -26,6 +26,7 @@ OPC Foundation Cloud Initiative Open-Source Reference Solution
   - [Using It Manually](#using-it-manually)
 - [Accessing the Web UIs](#accessing-the-web-uis)
 - [Managing the Cluster with Portainer](#managing-the-cluster-with-portainer)
+  - ["Your Portainer instance timed out for security purposes"](#your-portainer-instance-timed-out-for-security-purposes)
   - [Single Cluster vs. Split Edge/Cloud Deployment](#single-cluster-vs-split-edgecloud-deployment)
 - [Tutorials](#tutorials)
   - [Onboarding an OPC UA Device](./tutorial-onboarding-opcua-device.md)
@@ -632,6 +633,34 @@ How the K3s connection works:
   API server **in-cluster** using the mounted ServiceAccount token — it manages
   the local Kubernetes environment out of the box.
 - Portainer data (users, settings) is persisted on the Pi at `/portainer`.
+
+### "Your Portainer instance timed out for security purposes"
+
+On a **fresh** installation Portainer only allows the initial admin account to be
+created within a few minutes of first start. If you browse to it later than that,
+the setup page is replaced by:
+
+> **New Portainer installation** — Your Portainer instance timed out for security
+> purposes. To re-enable your Portainer instance, you will need to restart
+> Portainer.
+
+This is a deliberate safeguard: it stops a publicly reachable, unclaimed instance
+from being taken over by whoever finds it first. Restart the pod to reopen the
+window, then create the admin account promptly:
+
+```sh
+kubectl rollout restart -n cloud deployment/portainer
+kubectl rollout status -n cloud deployment/portainer
+```
+
+Reload `https://<device-ip>:9443` and the account creation page returns. The
+timeout only applies until an admin user exists — once you have created it, normal
+logins are not time limited.
+
+> Because Portainer's data lives on the node at `/portainer`, the admin account
+> survives pod restarts. If you ever need to start completely fresh (for example
+> after losing the password), delete the deployment, remove that directory with
+> `sudo rm -rf /portainer`, and re-apply `cloud.yaml`.
 
 ### Single Cluster vs. Split Edge/Cloud Deployment
 
