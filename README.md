@@ -78,7 +78,7 @@ You can deploy it today, on hardware you own, with no subscription fee.
   auditable command pattern rather than a bespoke integration.
 - **Build your own applications against a standard REST API.** The OPC UA Web API
   (OpenAPI-based) lets any language talk to your OPC UA estate over plain HTTP/JSON.
-- **Run the whole thing on a $350 industrial PC** — or scale the same manifests
+- **Run the whole thing on a less than $300 industrial PC** — or scale the same manifests
   across a fleet, or split them between edge and cloud clusters. Same code, same
   standards.
 
