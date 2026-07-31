@@ -623,7 +623,7 @@ To keep both UIs reachable on the single node,
 **Portainer CE** provides a web UI to inspect and manage everything running on the
 single-node K3s cluster (deployments, pods, logs, container shells, events, and
 volumes). It is deployed by `cloud.yaml` and is pre-wired to manage the
-cluster it runs in — no manual endpoint configuration is required.
+cluster it runs in — no manual endpoint configuration is required (Click on `Home` -> `Live connect` after setting the admin password).
 
 How the K3s connection works:
 
