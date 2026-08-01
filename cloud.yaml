@@ -23,12 +23,19 @@ data:
       env = "dev"
 
     [agent]
-      interval = "1s"
+      # mqtt_consumer is a SERVICE input: messages are pushed to the accumulator
+      # asynchronously, so a 1s gather interval bought nothing and just produced
+      # "Collection took longer than expected" spam once the Pi was loaded -
+      # immediately before Telegraf began thrashing its own MQTT connection
+      # (reconnecting every ~80s and delivering nothing).
+      interval = "10s"
       round_interval = true
-      metric_batch_size = 200
-      metric_buffer_limit = 2000
+      metric_batch_size = 1000
+      # 2000 was far too small: at 1Hz across ~58 writers any InfluxDB stall
+      # overflowed the buffer and metrics were silently dropped.
+      metric_buffer_limit = 100000
       collection_jitter = "0s"
-      flush_interval = "1s"
+      flush_interval = "5s"
       flush_jitter = "0s"
       logfile = ""
       omit_hostname = false
@@ -45,7 +52,11 @@ data:
       password = "${IOT_PASSWORD}"
       insecure_skip_verify = true
       connection_timeout = "30s"
-      persistent_session = false
+      # Clean sessions (the old "false") meant the broker discarded anything
+      # published while Telegraf was away - and Telegraf was reconnecting ~45
+      # times an hour. With a persistent session the broker queues QoS-1
+      # messages for this client_id instead, so restarts stop losing data.
+      persistent_session = true
 
       # Keep the MQTT topic as a tag (useful for filtering/debugging)
       topic_tag = "mqtt_topic"
@@ -107,7 +118,8 @@ data:
       password = "${IOT_PASSWORD}"
       insecure_skip_verify = true
       connection_timeout = "30s"
-      persistent_session = false
+      # See the note on the data input above.
+      persistent_session = true
       topic_tag = "mqtt_topic"
 
       data_format = "json_v2"
@@ -224,14 +236,10 @@ data:
     # evicts the session with a clean "NormalDisconnection" every ~30s. Allow the
     # longer interval so long-lived publisher sessions are not torn down.
     max_keepalive 120
-    # DIAGNOSTIC (temporary): UA Cloud Publisher is intermittently dropped with
-    # "Protocol error" preceded by an OpenSSL "Broken pipe", i.e. Mosquitto read
-    # a packet it considers malformed and closed the socket. The default log
-    # level does not say which packet. log_type all prints the packet type,
-    # topic and length so the offending PUBLISH can be identified.
-    # REMOVE THIS once the publisher issue is resolved: at ~1Hz it writes several
-    # log lines per second, which is real CPU/IO load on the Pi.
-    log_type all
+    # Telegraf now uses persistent sessions, so the broker queues QoS-1 messages
+    # for it while it is disconnected. The default max_queued_messages of 1000 is
+    # only ~16s of traffic at this rate, which would make a restart lossy anyway.
+    max_queued_messages 200000
     # TLS + username/password authentication are enabled. For production,
     # replace the self-signed certificates with ones from a trusted CA.
 ---
