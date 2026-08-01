@@ -10,6 +10,12 @@ metadata:
   namespace: edge
 spec:
   replicas: 1
+  # Single instance with hostPath volumes (settings, nodesets, pki, logs). The
+  # default RollingUpdate strategy starts the replacement pod BEFORE terminating
+  # the old one, so two servers would briefly share the same PKI/settings
+  # directories and both try to bind the OPC UA port. Recreate terminates first.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: ua-edgetranslator
@@ -204,6 +210,11 @@ metadata:
   namespace: edge
 spec:
   replicas: 1
+  # Single instance with hostPath volumes (settings, pki, logs). Two publishers
+  # sharing /publisher/settings would race on settings.json and both publish the
+  # same DataSetWriters. Recreate terminates the old pod before starting the new.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: ua-cloudpublisher
@@ -769,6 +780,9 @@ metadata:
   namespace: edge
 spec:
   replicas: 1
+  # Single instance with hostPath volumes; see the note on ua-edgetranslator.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: ua-cloudcommander
@@ -884,6 +898,9 @@ metadata:
   namespace: munich
 spec:
   replicas: 1
+  # Single instance with a hostPath volume; see the note on ua-edgetranslator.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: mes
@@ -942,6 +959,9 @@ metadata:
   namespace: munich
 spec:
   replicas: 1
+  # Single instance with a hostPath volume; see the note on ua-edgetranslator.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: assembly
@@ -1000,6 +1020,9 @@ metadata:
   namespace: munich
 spec:
   replicas: 1
+  # Single instance with a hostPath volume; see the note on ua-edgetranslator.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: test
@@ -1058,6 +1081,9 @@ metadata:
   namespace: munich
 spec:
   replicas: 1
+  # Single instance with a hostPath volume; see the note on ua-edgetranslator.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: packaging
