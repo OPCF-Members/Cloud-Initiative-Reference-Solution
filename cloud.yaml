@@ -364,6 +364,15 @@ metadata:
   namespace: cloud
 spec:
   replicas: 1
+  # InfluxDB is a single instance backed by the hostPath /influxdb2 and takes an
+  # exclusive lock on its engine directory. The default RollingUpdate strategy
+  # starts the new pod BEFORE terminating the old one, so the new pod can never
+  # acquire the lock: it CrashLoopBackOffs and the rollout deadlocks forever
+  # while two pods fight over the same data directory. Recreate terminates the
+  # old pod first, which is the only safe option for a single-writer database on
+  # a hostPath volume.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: influxdb
@@ -393,6 +402,15 @@ spec:
               value: "iot"
             - name: DOCKER_INFLUXDB_INIT_BUCKET
               value: "mqtt"
+            # Bound the bucket's lifetime. Without this the bucket is created with
+            # INFINITE retention, so nothing ever ages out - which meant the series
+            # created by the old messageId tag (one series per message) would have
+            # polluted the index forever. NOTE: this only applies when InfluxDB
+            # first initialises (INIT_MODE=setup); it does NOT alter an existing
+            # bucket. To change retention on a live bucket use:
+            #   influx bucket update --name mqtt --org iot --retention 30d
+            - name: DOCKER_INFLUXDB_INIT_RETENTION
+              value: "30d"
             - name: DOCKER_INFLUXDB_INIT_ADMIN_TOKEN
               valueFrom:
                 secretKeyRef:
