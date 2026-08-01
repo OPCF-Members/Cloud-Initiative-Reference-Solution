@@ -63,11 +63,12 @@ data:
           rename   = "publisher"
           optional = false
 
-        # OPTIONAL: top-level MessageId as tag
-        [[inputs.mqtt_consumer.json_v2.tag]]
-          path     = "MessageId"
-          rename   = "messageId"
-          optional = true
+        # NOTE: MessageId is deliberately NOT mapped here. It is unique for every
+        # single message, so tagging it made InfluxDB create a brand new series
+        # per message (~86k/day from this 1Hz input alone). That cardinality
+        # explosion - not query shape or disk speed - is what made every Grafana
+        # panel slow and drove InfluxDB's memory up. Tags must be low-cardinality.
+        # If you ever need the id back, add it as a *field*, never as a tag.
 
         # Parse the array Messages[] into one metric per element
         [[inputs.mqtt_consumer.json_v2.object]]
@@ -129,10 +130,10 @@ data:
           rename   = "datasetWriterId"
           optional = false
 
-        [[inputs.mqtt_consumer.json_v2.tag]]
-          path     = "MessageId"
-          rename   = "messageId"
-          optional = true
+        # NOTE: MessageId is deliberately NOT mapped here - see the comment in the
+        # data input above. It is unique per message and tagging it created one
+        # InfluxDB series per metadata message, which is why scanning
+        # opcua_metadata (87k points over 2 days) was so expensive in every panel.
 
         # Metadata name (this can be long; tag is convenient for filtering,
         # but if you worry about cardinality, switch this to a field below.)
@@ -223,6 +224,15 @@ data:
     # evicts the session with a clean "NormalDisconnection" every ~30s. Allow the
     # longer interval so long-lived publisher sessions are not torn down.
     max_keepalive 120
+    # DIAGNOSTIC (temporary): UA Cloud Publisher is being dropped with
+    # "Protocol error" preceded by an OpenSSL "Broken pipe", i.e. Mosquitto read
+    # a packet it considers malformed and closed the socket. The default log
+    # level does not say which packet. log_type all prints the packet type,
+    # topic and length, so the offending PUBLISH (suspected: an oversized
+    # metadata message - the publisher's BrokerMessageSize is 262144) can be
+    # identified. REMOVE THIS once the root cause is found: it is very verbose
+    # and costs CPU on the Pi.
+    log_type all
     # TLS + username/password authentication are enabled. For production,
     # replace the self-signed certificates with ones from a trusted CA.
 ---
