@@ -281,6 +281,18 @@ spec:
             - |
               set -e
               cd /certs
+              # IDEMPOTENT: only generate if we do not already have a cert. These
+              # files live on a hostPath, so they now survive pod restarts.
+              # Previously this ran unconditionally against an emptyDir, so EVERY
+              # broker restart minted a brand new CA and server certificate and
+              # handed every client a different identity - tearing down all
+              # established TLS sessions at once and showing up in the clients as
+              # "Disconnected from MQTT broker" with assorted reason codes.
+              if [ -s ca.crt ] && [ -s server.crt ] && [ -s server.key ]; then
+                echo "Existing broker certificates found; reusing them."
+                exit 0
+              fi
+              echo "No broker certificates present; generating a new set."
               # Self-signed CA
               openssl req -new -x509 -days 3650 -nodes \
                 -subj "/CN=Mosquitto Demo CA" \
@@ -353,7 +365,12 @@ spec:
           hostPath:
             path: "/mosquitto"
         - name: mosquitto-certs
-          emptyDir: {}
+          # hostPath (not emptyDir) so the broker keeps the SAME TLS identity
+          # across restarts. With an emptyDir every restart produced a new CA and
+          # server cert, disconnecting every MQTT client simultaneously.
+          hostPath:
+            path: "/mosquitto/certs"
+            type: DirectoryOrCreate
 ---
 apiVersion: v1
 kind: Service

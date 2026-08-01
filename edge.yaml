@@ -411,10 +411,22 @@ data:
   # UA Cloud Commander is listed as well. It is itself an OPC UA server
   # (Opc.Ua.Cloud.Commander.UAServer derives from StandardServer) but exposes no
   # custom address space, so the only node subscribed is the standard
-  # Server_ServerStatus_State (i=2259) - a liveness signal. The real purpose of the
-  # entry is to make the Publisher include it in the GDS Server Push loop, which
-  # only iterates the endpoints found in this file, so the Commander gets a
-  # CA-issued certificate and issuer list like every other server in the stack.
+  # Server_ServerStatus_CurrentTime (i=2258) - a liveness heartbeat. The real
+  # purpose of the entry is to make the Publisher include it in the GDS Server
+  # Push loop, which only iterates the endpoints found in this file, so the
+  # Commander gets a CA-issued certificate and issuer list like every other
+  # server in the stack.
+  #
+  # NOTE: this deliberately subscribes to CurrentTime (i=2258) and NOT to
+  # Server_ServerStatus_State (i=2259). State never changes - it reads "Running"
+  # forever - so that subscription had no data updates at all and depended purely
+  # on server keep-alives. The parked Publish request then expired before the
+  # keep-alive was due, and BOTH ends logged a fault every 100 seconds, forever:
+  #   publisher: Publish #NNNN ... Error: ... (BadTimeout)
+  #   commander: SERVER - Service Fault Occurred. Reason=BadTimeout
+  # CurrentTime ticks continuously, so real data always arrives well inside the
+  # timeout - and a moving timestamp is a far better liveness signal than a
+  # constant. Nothing was ever lost, but the logs were unusable.
   persistency.json: |
     [
       {
@@ -745,7 +757,7 @@ data:
         "EndpointUrl": "opc.tcp://ua-cloudcommander.edge.svc.cluster.local:4840",
         "OpcNodes": [
           {
-            "Id": "i=2259",
+            "Id": "i=2258",
             "OpcSamplingInterval": 5000,
             "OpcPublishingInterval": 10000,
             "HeartbeatInterval": 0,
