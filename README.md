@@ -28,6 +28,7 @@ OPC Foundation Cloud Initiative Open-Source Reference Solution
 - [Managing the Cluster with Portainer](#managing-the-cluster-with-portainer)
   - ["Your Portainer instance timed out for security purposes"](#your-portainer-instance-timed-out-for-security-purposes)
   - [Single Cluster vs. Split Edge/Cloud Deployment](#single-cluster-vs-split-edgecloud-deployment)
+- [Inspecting the Broker with MQTT Explorer](#inspecting-the-broker-with-mqtt-explorer)
 - [Tutorials](#tutorials)
   - [Onboarding an OPC UA Device](./tutorial-onboarding-opcua-device.md)
   - [Onboarding a Non-OPC UA Device](./tutorial-onboarding-non-opcua-device.md)
@@ -179,6 +180,7 @@ end-to-end pipeline from industrial protocols to a time-series database.
 | **mes**, **assembly**, **test**, **packaging** | `munich` | `ghcr.io/digitaltwinconsortium/manufacturingontologies:main` | 4840 (each) |
 | **modbus-simulator** | `munich` | `python:3.12-slim` | 502 (Modbus TCP) |
 | **mosquitto** | `cloud` | `eclipse-mosquitto:2.0.18` | 8883 (MQTT/TLS) |
+| **mqtt-explorer** | `cloud` | `smeagolworms4/mqtt-explorer:latest` | **4000 (UI)** |
 | **telegraf** | `cloud` | `telegraf:1.37-alpine` | — |
 | **influxdb** | `cloud` | `influxdb:2.7` | **8086 (UI/API)** |
 | **grafana** | `cloud` | `grafana/grafana:11.2.0` | **3000 (UI)** |
@@ -610,6 +612,7 @@ Replace `<device-ip>` with the CM5's IP address (from `ip addr` or
 | **Portainer** | `https://<device-ip>:9443` | Kubernetes management UI for the K3s cluster. On first access you set the admin password (see *Managing the Cluster with Portainer*). |
 | **Grafana** | `http://<device-ip>:3000` | Dashboards & alerting. Log in with the `IOT_USERNAME` / `IOT_PASSWORD` you set. The InfluxDB data source and a starter dashboard are pre-provisioned (see *Dashboards with Grafana*). |
 | **UA Cloud Action** | `http://<device-ip>:8082` | Status UI for the automated feedback loop (data-source, broker, and Commander connectivity) and OPC UA Web API. Log in with the `IOT_USERNAME` / `IOT_PASSWORD` you set (see *Automated Feedback Loop with UA Cloud Action*). |
+| **MQTT Explorer** | `http://<device-ip>:4000` | **Web UI for the Mosquitto broker** — browse the live topic tree, inspect the OPC UA PubSub payloads on `data/#` and `metadata`, and publish messages by hand (handy for driving UA Cloud Commander on `commands`). The broker connection is entered in the UI — see *Inspecting the Broker with MQTT Explorer*. ⚠️ **No built-in authentication.** |
 
 To keep both UIs reachable on the single node,
  **8081** (mapped to the container's 8080) while the Edge Translator stays on **8080**. No extra steps are needed — just browse to `:8080` and `:8081` respectively.
@@ -724,6 +727,45 @@ First-time setup:
    Publisher, Cloud Commander, Mosquitto, Telegraf, and InfluxDB workloads, view
    their logs, exec into containers, and monitor cluster resources.
 
+## Inspecting the Broker with MQTT Explorer
+
+Mosquitto has no user interface of its own, so the stack deploys **MQTT
+Explorer** as its web UI at `http://<device-ip>:4000`. Use it to see exactly what
+is on the wire between UA Cloud Publisher, Telegraf and UA Cloud Commander.
+
+### Connecting
+
+On first load, create a connection with these settings:
+
+| Field | Value |
+|-------|-------|
+| **Protocol** | `mqtts://` (TLS) |
+| **Host** | `mosquitto.cloud.svc.cluster.local` |
+| **Port** | `8883` |
+| **Username** / **Password** | your `IOT_USERNAME` / `IOT_PASSWORD` |
+| **Validate certificate** | **off** |
+
+Certificate validation must be **off**: Mosquitto uses a self-signed certificate
+generated on first start, which no public CA has signed.
+
+Once connected you will see the live topic tree:
+
+- **`data/#`** — OPC UA PubSub telemetry from UA Cloud Publisher (one message per
+  publishing cycle, carrying the `Messages[]` array Telegraf parses)
+- **`metadata`** — the `ua-metadata` messages describing each `DataSetWriterId`;
+  this is the stream the Grafana panels resolve station names from
+- **`commands` / `responses`** — the UA Cloud Commander request/response path
+
+> ⚠️ **MQTT Explorer has no authentication of its own.** Unlike the other UIs in
+> this stack it has no login, and anyone who can reach port 4000 can publish to
+> any topic — including `commands`, which UA Cloud Commander will execute against
+> your OPC UA servers. Keep it on a trusted network, place it behind an
+> authenticating reverse proxy, or scale it to zero when it is not needed:
+>
+> ```sh
+> kubectl scale deployment/mqtt-explorer -n cloud --replicas=0
+> ```
+
 ## Tutorials
 
 Step-by-step guides live in their own files to keep this README readable:
@@ -783,7 +825,7 @@ the K3s node itself (root of trust for all `hostPath` data).
 
 | STRIDE category | Representative threats in this stack | Mitigations already in place | Residual risk / gaps |
 |-----------------|--------------------------------------|------------------------------|----------------------|
-| **Spoofing** (identity) | A rogue client impersonates the Publisher or **UA Cloud Commander/Action** to the broker; an attacker impersonates a web UI user (Translator, Publisher, Grafana, UA Cloud Action, or Portainer); a fake OPC UA server feeds the Publisher; a forged `ua-action-request` triggers an OPC UA method; an unauthenticated caller hits the **OPC UA Web API**; anything on the pod network impersonates a Modbus master. | MQTT broker requires username/password (`allow_anonymous false`); all web UIs (`:8080/:8081/:8082/:3000/:9443`) require login; the **UA Cloud Action web UI and OPC UA Web API mandate HTTP Basic authentication on every request (no anonymous access)**; OPC UA supports certificate exchange between Publisher/Commander and server. | Single shared credential set across all components (including Grafana/Portainer admin and the Web API); Basic-auth credentials are only as safe as the transport (send over TLS in production); no per-service identities or mutual TLS (mTLS); broker does not authenticate clients by certificate; any client that can publish to `commands` can drive Commander; **Modbus TCP has no authentication whatsoever by protocol design** — the simulator (and any real Modbus device) trusts every caller. |
+| **Spoofing** (identity) | A rogue client impersonates the Publisher or **UA Cloud Commander/Action** to the broker; an attacker impersonates a web UI user (Translator, Publisher, Grafana, UA Cloud Action, or Portainer); a fake OPC UA server feeds the Publisher; a forged `ua-action-request` triggers an OPC UA method; an unauthenticated caller hits the **OPC UA Web API**; anything on the pod network impersonates a Modbus master. | MQTT broker requires username/password (`allow_anonymous false`); most web UIs (`:8080/:8081/:8082/:3000/:9443`) require login; the **UA Cloud Action web UI and OPC UA Web API mandate HTTP Basic authentication on every request (no anonymous access)**; OPC UA supports certificate exchange between Publisher/Commander and server. | Single shared credential set across all components (including Grafana/Portainer admin and the Web API); Basic-auth credentials are only as safe as the transport (send over TLS in production); no per-service identities or mutual TLS (mTLS); broker does not authenticate clients by certificate; any client that can publish to `commands` can drive Commander; **MQTT Explorer (`:4000`) has no authentication of its own, so anyone who can reach it can publish to any topic — including `commands`**; **Modbus TCP has no authentication whatsoever by protocol design** — the simulator (and any real Modbus device) trusts every caller. |
 | **Tampering** (integrity) | Modification of telemetry in transit; tampering with `hostPath` config/cert files on the node; editing the ConfigMaps; **altering the imported `opcua_model` data** or the model importer script; a malicious command writing/actuating an OPC UA node via Commander; writing Modbus coils/registers on the simulated device. | MQTT is carried over TLS (8883); config is delivered via Kubernetes ConfigMaps/Secrets; Commander/Action send spec-compliant OPC UA PubSub Action envelopes; the seeded Thing Description and settings are delivered read-only from ConfigMaps. | Telegraf and UA Cloud Action use TLS verification skip (`insecure_skip_verify` / `MQTT_TLS_INSECURE=true`), so a man-in-the-middle with any cert is accepted; `hostPath` volumes (`/influxdb2`, `/translator/*`, `/publisher/*`, `/commander/*`, `/productionline/*`, `/mosquitto`, `/portainer`, `/grafana`) are writable by anyone with node access; no message signing on payloads; Commander performs Writes/MethodCalls with no per-action authorization; **Modbus traffic is plaintext and unauthenticated**, so anything on the pod network can read or write the simulated device's registers. |
 | **Repudiation** (auditability) | An operator changes a device mapping, publish set, Grafana dashboard, or issues a command and denies it; no record of who logged in or who imported a model. | Component logs are written to `hostPath` `logs` directories and pod stdout; Portainer records some cluster events. | No centralized, tamper-evident audit log; shared credentials make actions unattributable to an individual; command/action requests and model imports are not attributably logged; no log shipping or retention policy. |
 | **Information disclosure** (confidentiality) | Sniffing telemetry; reading credentials from the manifest; exposed dashboards (Grafana, Portainer, UA Cloud Action) on the node IP; leaking the **UA Cloud Library credentials** used by the import Job. | MQTT is encrypted with TLS; `INFLUX_TOKEN` is stored in a Kubernetes `Secret`; credentials are supplied at apply time (not committed to git). | Credentials (including UA Cloud Library and Grafana/Portainer admin) are injected as plain-text env vars (visible via `kubectl describe`/`exec`); Kubernetes Secrets are base64, not encrypted at rest by default; self-signed broker cert offers encryption but no server-identity assurance; all UIs are exposed on the node IP with no network policy. |
