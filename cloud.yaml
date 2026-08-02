@@ -1939,8 +1939,9 @@ spec:
         - name: REQUESTOR_ID
           value: "UACloudAction"
         # --- OPC UA method to invoke on high value (target server reachable by UA Cloud Commander) ---
+        # This is the assembly station's pressure-relief method
         - name: UA_SERVER_ENDPOINT
-          value: "opc.tcp://ua-edgetranslator.edge.svc.cluster.local:4840"
+          value: "opc.tcp://assembly.munich/"
         - name: UA_SERVER_METHOD_ID
           value: "ns=2;i=435"
         - name: UA_SERVER_OBJECT_ID
@@ -1948,7 +1949,7 @@ spec:
         - name: UA_SERVER_APPLICATION_NAME
           value: "assembly"
         - name: UA_SERVER_LOCATION_NAME
-          value: "seattle"
+          value: "munich"
         ports:
         - containerPort: 8080
 ---
