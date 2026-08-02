@@ -1742,6 +1742,531 @@ data:
         }
       ]
     }
+  # ---------------------------------------------------------------------------
+  # Modbus simulator dashboard.
+  #
+  # This is a SEPARATE dashboard rather than another entry in the "station"
+  # dropdown of production-line-oee.json on purpose: the modbus simulator is a
+  # non-OPC UA device surfaced through UA Edge Translator and publishes a
+  # completely different set of nodes (see the 'modbus-thing-description'
+  # ConfigMap in edge.yaml). It has no OEE, Status or product-count nodes, so
+  # adding it to that dropdown would leave ~10 of the 13 panels there blank.
+  #
+  # The writer-lookup preamble in every query is identical to the OEE dashboard
+  # (metadata lookback -2d, regex pushdown on the metaName/datasetWriterId tags);
+  # see the PERF comments there for why it is shaped this way.
+  # ---------------------------------------------------------------------------
+  modbus-simulator.json: |
+    {
+      "annotations": {
+        "list": []
+      },
+      "editable": true,
+      "graphTooltip": 1,
+      "schemaVersion": 39,
+      "title": "Modbus Simulator",
+      "uid": "modbus-simulator",
+      "tags": [
+        "opcua",
+        "modbus",
+        "edge-translator"
+      ],
+      "time": {
+        "from": "now-6h",
+        "to": "now"
+      },
+      "refresh": "30s",
+      "templating": {
+        "list": []
+      },
+      "panels": [
+        {
+          "id": 100,
+          "title": "Temperature",
+          "type": "timeseries",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "influxdb"
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 24,
+            "x": 0,
+            "y": 0
+          },
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "drawStyle": "line",
+                "lineInterpolation": "linear",
+                "lineWidth": 2,
+                "fillOpacity": 10,
+                "showPoints": "never",
+                "spanNulls": true,
+                "axisPlacement": "auto"
+              },
+              "unit": "celsius",
+              "decimals": 1
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": false
+            },
+            "tooltip": {
+              "mode": "single",
+              "sort": "none"
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "influxdb",
+                "uid": "influxdb"
+              },
+              "query": "import \"strings\"\nimport \"regexp\"\n\nstationRx = regexp.compile(v: \"modbus-simulator\")\n\nwriters =\n  from(bucket: \"mqtt\")\n  |> range(start: -2d)\n  |> filter(fn: (r) => r._measurement == \"opcua_metadata\")\n  |> filter(fn: (r) => r.metaName =~ stationRx)\n  |> keep(columns: [\"datasetWriterId\"])\n  |> group()\n  |> distinct(column: \"datasetWriterId\")\n  |> findColumn(fn: (key) => true, column: \"_value\")\n\nwritersRx = regexp.compile(v: \"^(\" + strings.joinStr(arr: writers, v: \"|\") + \")$\")\n\nfrom(bucket: \"mqtt\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"opcua_pubsub\" and r._field == \"Payload_Temperature_Value\")\n  |> filter(fn: (r) => r.datasetWriterId =~ writersRx)\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> group()\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> map(fn: (r) => ({_time: r._time, _value: float(v: r._value)}))\n  |> keep(columns: [\"_time\", \"_value\"])\n  |> yield(name: \"temperature\")"
+            }
+          ]
+        },
+        {
+          "id": 101,
+          "title": "Pressure",
+          "type": "timeseries",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "influxdb"
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 24,
+            "x": 0,
+            "y": 8
+          },
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "drawStyle": "line",
+                "lineInterpolation": "linear",
+                "lineWidth": 2,
+                "fillOpacity": 10,
+                "showPoints": "never",
+                "spanNulls": true,
+                "axisPlacement": "auto"
+              },
+              "unit": "pressurebar",
+              "decimals": 2,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "red",
+                    "value": 4.9
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": false
+            },
+            "tooltip": {
+              "mode": "single",
+              "sort": "none"
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "influxdb",
+                "uid": "influxdb"
+              },
+              "query": "import \"strings\"\nimport \"regexp\"\n\nstationRx = regexp.compile(v: \"modbus-simulator\")\n\nwriters =\n  from(bucket: \"mqtt\")\n  |> range(start: -2d)\n  |> filter(fn: (r) => r._measurement == \"opcua_metadata\")\n  |> filter(fn: (r) => r.metaName =~ stationRx)\n  |> keep(columns: [\"datasetWriterId\"])\n  |> group()\n  |> distinct(column: \"datasetWriterId\")\n  |> findColumn(fn: (key) => true, column: \"_value\")\n\nwritersRx = regexp.compile(v: \"^(\" + strings.joinStr(arr: writers, v: \"|\") + \")$\")\n\nfrom(bucket: \"mqtt\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"opcua_pubsub\" and r._field == \"Payload_Pressure_Value\")\n  |> filter(fn: (r) => r.datasetWriterId =~ writersRx)\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> group()\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> map(fn: (r) => ({_time: r._time, _value: float(v: r._value)}))\n  |> keep(columns: [\"_time\", \"_value\"])\n  |> yield(name: \"pressure\")"
+            }
+          ]
+        },
+        {
+          "id": 102,
+          "title": "Flow rate",
+          "type": "timeseries",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "influxdb"
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 24,
+            "x": 0,
+            "y": 16
+          },
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "drawStyle": "line",
+                "lineInterpolation": "linear",
+                "lineWidth": 2,
+                "fillOpacity": 10,
+                "showPoints": "never",
+                "spanNulls": true,
+                "axisPlacement": "auto"
+              },
+              "unit": "flowlpm",
+              "decimals": 1
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": false
+            },
+            "tooltip": {
+              "mode": "single",
+              "sort": "none"
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "influxdb",
+                "uid": "influxdb"
+              },
+              "query": "import \"strings\"\nimport \"regexp\"\n\nstationRx = regexp.compile(v: \"modbus-simulator\")\n\nwriters =\n  from(bucket: \"mqtt\")\n  |> range(start: -2d)\n  |> filter(fn: (r) => r._measurement == \"opcua_metadata\")\n  |> filter(fn: (r) => r.metaName =~ stationRx)\n  |> keep(columns: [\"datasetWriterId\"])\n  |> group()\n  |> distinct(column: \"datasetWriterId\")\n  |> findColumn(fn: (key) => true, column: \"_value\")\n\nwritersRx = regexp.compile(v: \"^(\" + strings.joinStr(arr: writers, v: \"|\") + \")$\")\n\nfrom(bucket: \"mqtt\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"opcua_pubsub\" and r._field == \"Payload_FlowRate_Value\")\n  |> filter(fn: (r) => r.datasetWriterId =~ writersRx)\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> group()\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> map(fn: (r) => ({_time: r._time, _value: float(v: r._value)}))\n  |> keep(columns: [\"_time\", \"_value\"])\n  |> yield(name: \"flowrate\")"
+            }
+          ]
+        },
+        {
+          "id": 103,
+          "title": "Energy consumption",
+          "type": "timeseries",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "influxdb"
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 24,
+            "x": 0,
+            "y": 24
+          },
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "drawStyle": "line",
+                "lineInterpolation": "linear",
+                "lineWidth": 2,
+                "fillOpacity": 10,
+                "showPoints": "never",
+                "spanNulls": true,
+                "axisPlacement": "auto"
+              },
+              "unit": "kwatth",
+              "decimals": 2
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": false
+            },
+            "tooltip": {
+              "mode": "single",
+              "sort": "none"
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "influxdb",
+                "uid": "influxdb"
+              },
+              "query": "import \"strings\"\nimport \"regexp\"\n\nstationRx = regexp.compile(v: \"modbus-simulator\")\n\nwriters =\n  from(bucket: \"mqtt\")\n  |> range(start: -2d)\n  |> filter(fn: (r) => r._measurement == \"opcua_metadata\")\n  |> filter(fn: (r) => r.metaName =~ stationRx)\n  |> keep(columns: [\"datasetWriterId\"])\n  |> group()\n  |> distinct(column: \"datasetWriterId\")\n  |> findColumn(fn: (key) => true, column: \"_value\")\n\nwritersRx = regexp.compile(v: \"^(\" + strings.joinStr(arr: writers, v: \"|\") + \")$\")\n\n// EnergyConsumption is a monotonically increasing counter, so last() (not mean)\n// is the meaningful aggregate within a window.\nfrom(bucket: \"mqtt\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"opcua_pubsub\" and r._field == \"Payload_EnergyConsumption_Value\")\n  |> filter(fn: (r) => r.datasetWriterId =~ writersRx)\n  |> aggregateWindow(every: v.windowPeriod, fn: last, createEmpty: false)\n  |> group()\n  |> aggregateWindow(every: v.windowPeriod, fn: last, createEmpty: false)\n  |> map(fn: (r) => ({_time: r._time, _value: float(v: r._value)}))\n  |> keep(columns: [\"_time\", \"_value\"])\n  |> yield(name: \"energy\")"
+            }
+          ]
+        },
+        {
+          "id": 104,
+          "title": "Motor speed",
+          "type": "timeseries",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "influxdb"
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 24,
+            "x": 0,
+            "y": 32
+          },
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "drawStyle": "line",
+                "lineInterpolation": "linear",
+                "lineWidth": 2,
+                "fillOpacity": 10,
+                "showPoints": "never",
+                "spanNulls": true,
+                "axisPlacement": "auto"
+              },
+              "unit": "rotrpm",
+              "decimals": 0
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": false
+            },
+            "tooltip": {
+              "mode": "single",
+              "sort": "none"
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "influxdb",
+                "uid": "influxdb"
+              },
+              "query": "import \"strings\"\nimport \"regexp\"\n\nstationRx = regexp.compile(v: \"modbus-simulator\")\n\nwriters =\n  from(bucket: \"mqtt\")\n  |> range(start: -2d)\n  |> filter(fn: (r) => r._measurement == \"opcua_metadata\")\n  |> filter(fn: (r) => r.metaName =~ stationRx)\n  |> keep(columns: [\"datasetWriterId\"])\n  |> group()\n  |> distinct(column: \"datasetWriterId\")\n  |> findColumn(fn: (key) => true, column: \"_value\")\n\nwritersRx = regexp.compile(v: \"^(\" + strings.joinStr(arr: writers, v: \"|\") + \")$\")\n\nfrom(bucket: \"mqtt\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"opcua_pubsub\" and r._field == \"Payload_MotorSpeed_Value\")\n  |> filter(fn: (r) => r.datasetWriterId =~ writersRx)\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> group()\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> map(fn: (r) => ({_time: r._time, _value: float(v: r._value)}))\n  |> keep(columns: [\"_time\", \"_value\"])\n  |> yield(name: \"motorspeed\")"
+            }
+          ]
+        },
+        {
+          "id": 105,
+          "title": "Machine state",
+          "type": "timeseries",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "influxdb"
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 24,
+            "x": 0,
+            "y": 40
+          },
+          "fieldConfig": {
+            "defaults": {
+              "mappings": [
+                {
+                  "type": "value",
+                  "options": {
+                    "0": {
+                      "text": "Stopped",
+                      "color": "blue",
+                      "index": 0
+                    },
+                    "1": {
+                      "text": "Running",
+                      "color": "green",
+                      "index": 1
+                    },
+                    "2": {
+                      "text": "Fault",
+                      "color": "red",
+                      "index": 2
+                    }
+                  }
+                }
+              ],
+              "custom": {
+                "drawStyle": "line",
+                "lineInterpolation": "stepAfter",
+                "lineWidth": 2,
+                "fillOpacity": 15,
+                "showPoints": "never",
+                "spanNulls": true,
+                "axisSoftMin": 0,
+                "axisSoftMax": 2
+              },
+              "decimals": 0
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": false
+            },
+            "tooltip": {
+              "mode": "single",
+              "sort": "none"
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "influxdb",
+                "uid": "influxdb"
+              },
+              "query": "import \"strings\"\nimport \"regexp\"\n\nstationRx = regexp.compile(v: \"modbus-simulator\")\n\nwriters =\n  from(bucket: \"mqtt\")\n  |> range(start: -2d)\n  |> filter(fn: (r) => r._measurement == \"opcua_metadata\")\n  |> filter(fn: (r) => r.metaName =~ stationRx)\n  |> keep(columns: [\"datasetWriterId\"])\n  |> group()\n  |> distinct(column: \"datasetWriterId\")\n  |> findColumn(fn: (key) => true, column: \"_value\")\n\nwritersRx = regexp.compile(v: \"^(\" + strings.joinStr(arr: writers, v: \"|\") + \")$\")\n\n// Discrete enum: last() within the window, never mean().\nfrom(bucket: \"mqtt\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"opcua_pubsub\" and r._field == \"Payload_MachineState_Value\")\n  |> filter(fn: (r) => r.datasetWriterId =~ writersRx)\n  |> aggregateWindow(every: v.windowPeriod, fn: last, createEmpty: false)\n  |> group()\n  |> aggregateWindow(every: v.windowPeriod, fn: last, createEmpty: false)\n  |> map(fn: (r) => ({_time: r._time, _value: float(v: r._value)}))\n  |> keep(columns: [\"_time\", \"_value\"])\n  |> yield(name: \"machinestate\")"
+            }
+          ]
+        },
+        {
+          "id": 106,
+          "title": "Running",
+          "type": "timeseries",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "influxdb"
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 24,
+            "x": 0,
+            "y": 48
+          },
+          "fieldConfig": {
+            "defaults": {
+              "mappings": [
+                {
+                  "type": "value",
+                  "options": {
+                    "0": {
+                      "text": "Stopped",
+                      "color": "red",
+                      "index": 0
+                    },
+                    "1": {
+                      "text": "Running",
+                      "color": "green",
+                      "index": 1
+                    }
+                  }
+                }
+              ],
+              "custom": {
+                "drawStyle": "line",
+                "lineInterpolation": "stepAfter",
+                "lineWidth": 2,
+                "fillOpacity": 15,
+                "showPoints": "never",
+                "spanNulls": true,
+                "axisSoftMin": 0,
+                "axisSoftMax": 1
+              },
+              "decimals": 0
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": false
+            },
+            "tooltip": {
+              "mode": "single",
+              "sort": "none"
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "influxdb",
+                "uid": "influxdb"
+              },
+              "query": "import \"strings\"\nimport \"regexp\"\n\nstationRx = regexp.compile(v: \"modbus-simulator\")\n\nwriters =\n  from(bucket: \"mqtt\")\n  |> range(start: -2d)\n  |> filter(fn: (r) => r._measurement == \"opcua_metadata\")\n  |> filter(fn: (r) => r.metaName =~ stationRx)\n  |> keep(columns: [\"datasetWriterId\"])\n  |> group()\n  |> distinct(column: \"datasetWriterId\")\n  |> findColumn(fn: (key) => true, column: \"_value\")\n\nwritersRx = regexp.compile(v: \"^(\" + strings.joinStr(arr: writers, v: \"|\") + \")$\")\n\n// Boolean node: aggregate with last(), then project to 0/1 for plotting.\n// float() cannot convert a bool, hence the conditional.\nfrom(bucket: \"mqtt\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"opcua_pubsub\" and r._field == \"Payload_Running_Value\")\n  |> filter(fn: (r) => r.datasetWriterId =~ writersRx)\n  |> aggregateWindow(every: v.windowPeriod, fn: last, createEmpty: false)\n  |> group()\n  |> aggregateWindow(every: v.windowPeriod, fn: last, createEmpty: false)\n  |> map(fn: (r) => ({_time: r._time, _value: if r._value then 1.0 else 0.0}))\n  |> keep(columns: [\"_time\", \"_value\"])\n  |> yield(name: \"running\")"
+            }
+          ]
+        },
+        {
+          "id": 107,
+          "title": "Fault active",
+          "type": "timeseries",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "influxdb"
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 24,
+            "x": 0,
+            "y": 56
+          },
+          "fieldConfig": {
+            "defaults": {
+              "mappings": [
+                {
+                  "type": "value",
+                  "options": {
+                    "0": {
+                      "text": "OK",
+                      "color": "green",
+                      "index": 0
+                    },
+                    "1": {
+                      "text": "Fault",
+                      "color": "red",
+                      "index": 1
+                    }
+                  }
+                }
+              ],
+              "custom": {
+                "drawStyle": "line",
+                "lineInterpolation": "stepAfter",
+                "lineWidth": 2,
+                "fillOpacity": 15,
+                "showPoints": "never",
+                "spanNulls": true,
+                "axisSoftMin": 0,
+                "axisSoftMax": 1
+              },
+              "decimals": 0
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": false
+            },
+            "tooltip": {
+              "mode": "single",
+              "sort": "none"
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "influxdb",
+                "uid": "influxdb"
+              },
+              "query": "import \"strings\"\nimport \"regexp\"\n\nstationRx = regexp.compile(v: \"modbus-simulator\")\n\nwriters =\n  from(bucket: \"mqtt\")\n  |> range(start: -2d)\n  |> filter(fn: (r) => r._measurement == \"opcua_metadata\")\n  |> filter(fn: (r) => r.metaName =~ stationRx)\n  |> keep(columns: [\"datasetWriterId\"])\n  |> group()\n  |> distinct(column: \"datasetWriterId\")\n  |> findColumn(fn: (key) => true, column: \"_value\")\n\nwritersRx = regexp.compile(v: \"^(\" + strings.joinStr(arr: writers, v: \"|\") + \")$\")\n\n// The simulator trips this coil whenever Pressure crosses 4.9 bar.\nfrom(bucket: \"mqtt\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"opcua_pubsub\" and r._field == \"Payload_FaultActive_Value\")\n  |> filter(fn: (r) => r.datasetWriterId =~ writersRx)\n  |> aggregateWindow(every: v.windowPeriod, fn: last, createEmpty: false)\n  |> group()\n  |> aggregateWindow(every: v.windowPeriod, fn: last, createEmpty: false)\n  |> map(fn: (r) => ({_time: r._time, _value: if r._value then 1.0 else 0.0}))\n  |> keep(columns: [\"_time\", \"_value\"])\n  |> yield(name: \"faultactive\")"
+            }
+          ]
+        }
+      ]
+    }
 ---
 apiVersion: apps/v1
 kind: Deployment
