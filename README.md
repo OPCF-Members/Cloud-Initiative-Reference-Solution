@@ -332,6 +332,20 @@ kubectl get nodes
    > log into the web UIs and the broker, and the generated `INFLUX_TOKEN` to
    > authenticate Telegraf and log into InfluxDB via the API.
 
+   > **Lost the token, or re-applying later?** It is stored in the `influxdb-auth`
+   > Secret, so you can read it back out of the cluster rather than generating a
+   > new one:
+   >
+   > ```bash
+   > export INFLUX_TOKEN="$(kubectl get secret influxdb-auth -n cloud \
+   >   -o jsonpath='{.data.INFLUX_TOKEN}' | base64 -d)"
+   > ```
+   >
+   > **Always do this before re-applying the manifests.** Generating a fresh token
+   > only rewrites the Secret — InfluxDB keeps the admin token it was initialised
+   > with, so Telegraf, Grafana and UA Cloud Action would all suddenly fail to
+   > authenticate against a database that never changed.
+
    > **Deploying edge and cloud on separate clusters?** The manifests reference each
    > other by in-cluster DNS (`mosquitto.cloud.svc.cluster.local`,
    > `influxdb.cloud.svc.cluster.local`, and
@@ -380,6 +394,18 @@ Related OPC UA telemetry persistence paths are also mapped as `hostPath` volumes
 | `/grafana` | Grafana | Grafana database, users, and user-created dashboards. |
 
 > **Note:** Keep the `INFLUX_TOKEN` safe, to read the telemetry stored in InfluxDB in backup scenarios.
+>
+> If you no longer have it, retrieve it from the cluster — it is held in the
+> `influxdb-auth` Secret:
+>
+> ```bash
+> kubectl get secret influxdb-auth -n cloud -o jsonpath='{.data.INFLUX_TOKEN}' | base64 -d; echo
+> ```
+>
+> This is an **all-access admin token**: it can read and delete every bucket in
+> the org. Treat it as a secret and see
+> [Production Hardening Recommendations](#production-hardening-recommendations)
+> for scoping it down.
 
 ## Simulated Production Line
 
