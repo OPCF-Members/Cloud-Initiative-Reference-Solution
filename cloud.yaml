@@ -1929,7 +1929,7 @@ spec:
           value: "${IOT_USERNAME}"
         - name: BROKER_PASSWORD
           value: "${IOT_PASSWORD}"
-        # Topics UA Cloud Commander listens/responds on (it subscribes to commands/#, replies on responses)
+        # Topics UA Cloud Commander listens/responds on (it subscribes to commands, replies on responses)
         - name: TOPIC
           value: "commands"
         - name: RESPONSE_TOPIC

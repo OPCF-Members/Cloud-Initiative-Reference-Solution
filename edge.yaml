@@ -828,7 +828,7 @@ spec:
           value: "UACloudCommander"
         # Topic to subscribe to for incoming ua-action-request messages
         - name: TOPIC
-          value: "commands/#"
+          value: "commands"
         # Default topic to publish ua-action-response messages to
         - name: RESPONSE_TOPIC
           value: "responses"
