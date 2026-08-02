@@ -312,7 +312,7 @@ spec:
               mountPath: /certs
       containers:
         - name: mosquitto
-          image: eclipse-mosquitto:2.1.2
+          image: eclipse-mosquitto:2.1.2-alpine
           imagePullPolicy: Always
           env:
             - name: MOSQUITTO_USERNAME
