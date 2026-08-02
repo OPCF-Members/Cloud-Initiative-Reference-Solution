@@ -17,6 +17,7 @@ charts the result in Grafana.
 - [Step 6: OEE Over Time (Trend)](#step-6-oee-over-time-trend)
 - [Interpreting the Result](#interpreting-the-result)
 - [Adapting This to Real Machines](#adapting-this-to-real-machines)
+- [Query Performance Notes](#query-performance-notes)
 
 ## The Calculation
 
@@ -124,6 +125,7 @@ one station over the dashboard's selected time range.
 ```flux
 import "strings"
 import "array"
+import "regexp"
 
 // ---- parameters ------------------------------------------------
 station          = "assembly"   // "assembly" | "test" | "packaging"
@@ -137,49 +139,96 @@ stop  = v.timeRangeStop
 // window length in milliseconds (int(v:) yields nanoseconds)
 idealRunningTimeMs = float(v: int(v: stop) - int(v: start)) / 1000000.0
 
-// DataSetWriterIds that belong to this station (from the metadata stream)
+// DataSetWriterIds that belong to this station (from the metadata stream).
+// PERF: metaName is a tag, so a regex predicate is pushed down into the storage
+// engine. strings.containsStr() would be evaluated row-by-row in Flux instead.
+// The -2d lookback is effectively how long the publisher may stop publishing
+// metadata before this query returns nothing; do not shrink it casually.
+stationRx = regexp.compile(v: station)
+
 writers =
 	from(bucket: bucket)
-		|> range(start: -30d)
+		|> range(start: -2d)
 		|> filter(fn: (r) => r._measurement == "opcua_metadata")
-		|> filter(fn: (r) => strings.containsStr(v: r.metaName, substr: station))
+		|> filter(fn: (r) => r.metaName =~ stationRx)
 		|> keep(columns: ["datasetWriterId"])
 		|> group()
 		|> distinct(column: "datasetWriterId")
 		|> findColumn(fn: (key) => true, column: "_value")
 
-// all samples of one field for this station, as floats, in one table
-series = (field) =>
-	from(bucket: bucket)
-		|> range(start: start, stop: stop)
-		|> filter(fn: (r) => r._measurement == "opcua_pubsub" and r._field == field)
-		|> filter(fn: (r) => contains(value: r.datasetWriterId, set: writers))
-		|> toFloat()
-		|> group()
+// PERF: same reason - a regex on a tag pushes down, contains() does not.
+writersRx = regexp.compile(v: "^(" + strings.joinStr(arr: writers, v: "|") + ")$")
 
-// reduce a table to a single number
-scalar = (tables=<-, fn) => (tables |> fn() |> findRecord(fn: (key) => true, idx: 0))._value
-
-// counters are cumulative -> take (max - min) across the window
 producedField = "Payload_NumberOfManufacturedProducts_Value"
 scrappedField = "Payload_NumberOfDiscardedProducts_Value"
+faultyField   = "Payload_FaultyTime_Value"
 
-produced = scalar(tables: series(field: producedField), fn: max)
-		 - scalar(tables: series(field: producedField), fn: min)
-scrapped = scalar(tables: series(field: scrappedField), fn: max)
-		 - scalar(tables: series(field: scrappedField), fn: min)
+// PERF: every findRecord() call re-executes its whole upstream pipeline. Calling
+// it once per aggregate (max/min/sum for three fields) scans the window several
+// times over. Reading all three fields once and collapsing them with a single
+// reduce() scans the window once.
+raw =
+	from(bucket: bucket)
+		|> range(start: start, stop: stop)
+		|> filter(fn: (r) => r._measurement == "opcua_pubsub")
+		|> filter(fn: (r) => r._field == producedField or r._field == scrappedField or r._field == faultyField)
+		|> filter(fn: (r) => r.datasetWriterId =~ writersRx)
+		|> map(fn: (r) => ({_field: r._field, _value: float(v: r._value), seed: 0.0}))
+		|> keep(columns: ["_field", "_value", "seed"])
 
-// FaultyTime spikes once per fault with that fault's duration -> sum it (see note below)
-faultyMs = scalar(tables: series(field: "Payload_FaultyTime_Value"), fn: sum)
+// One flagged seed row keeps the table non-empty so findRecord() always returns
+// a record (FaultyTime does not exist until the first fault occurs). The flag
+// means it cannot influence any aggregate.
+seed = array.from(rows: [{_field: "seed", _value: 0.0, seed: 1.0}])
+
+stat =
+	union(tables: [raw, seed])
+		|> group()
+		|> reduce(
+			identity: {pMin: 0.0, pMax: 0.0, pN: 0.0, sMin: 0.0, sMax: 0.0, sN: 0.0, fSum: 0.0},
+			fn: (r, accumulator) => ({
+				pMin: if r.seed > 0.0 or r._field != producedField then accumulator.pMin
+					else if accumulator.pN == 0.0 or r._value < accumulator.pMin then r._value
+					else accumulator.pMin,
+				pMax: if r.seed > 0.0 or r._field != producedField then accumulator.pMax
+					else if accumulator.pN == 0.0 or r._value > accumulator.pMax then r._value
+					else accumulator.pMax,
+				pN:   if r.seed > 0.0 or r._field != producedField then accumulator.pN
+					else accumulator.pN + 1.0,
+				sMin: if r.seed > 0.0 or r._field != scrappedField then accumulator.sMin
+					else if accumulator.sN == 0.0 or r._value < accumulator.sMin then r._value
+					else accumulator.sMin,
+				sMax: if r.seed > 0.0 or r._field != scrappedField then accumulator.sMax
+					else if accumulator.sN == 0.0 or r._value > accumulator.sMax then r._value
+					else accumulator.sMax,
+				sN:   if r.seed > 0.0 or r._field != scrappedField then accumulator.sN
+					else accumulator.sN + 1.0,
+				fSum: if r.seed > 0.0 or r._field != faultyField then accumulator.fSum
+					else accumulator.fSum + r._value,
+			}),
+		)
+		|> findRecord(fn: (key) => true, idx: 0)
+
+// counters are cumulative -> the increase over the window is max - min
+produced = stat.pMax - stat.pMin
+scrapped = stat.sMax - stat.sMin
+
+// FaultyTime spikes once per fault with that fault's duration -> sum it
+faultyMs = stat.fSum
 
 runTimeMs   = idealRunningTimeMs - faultyMs
 totalPieces = produced + scrapped
 
-availability = if idealRunningTimeMs > 0.0 then runTimeMs / idealRunningTimeMs else 0.0
+availability = if idealRunningTimeMs > 0.0 and runTimeMs > 0.0 then runTimeMs / idealRunningTimeMs else 0.0
 performance  = if runTimeMs > 0.0 and totalPieces > 0.0 then
 				   idealCycleTimeMs * totalPieces / runTimeMs
 			   else 0.0
 quality      = if totalPieces > 0.0 then produced / totalPieces else 0.0
+
+// The simulated stations start at half their nominal cycle time
+// (m_actualCycleTime = CycleTime * 500), so Performance legitimately exceeds 1.0
+// and would push a gauge past 100%. Clamp it for display.
+perfClamped = if performance > 1.0 then 1.0 else performance
 
 array.from(
 	rows: [
@@ -189,11 +238,17 @@ array.from(
 			Availability: availability * 100.0,
 			Performance: performance * 100.0,
 			Quality: quality * 100.0,
-			OEE: availability * performance * quality * 100.0,
+			OEE: availability * perfClamped * quality * 100.0,
 		},
 	],
 )
 ```
+
+> **This is the query the provisioned dashboard actually runs.** It is shaped for
+> performance, not brevity: the naive version (one `findRecord()` per aggregate,
+> `strings.containsStr()` on metadata, `contains()` on `datasetWriterId`) is
+> functionally equivalent but took **50% longer**. The three PERF comments above mark the changes that
+> matter. See *Query Performance Notes* at the end of this tutorial.
 
 > **What actually drives Availability in the simulation.** Faults occur randomly
 > (`stationFailure = NormalDistribution(...) > 3.0`, i.e. a rare >3σ event per
@@ -202,8 +257,10 @@ array.from(
 > So each fault contributes roughly **60 seconds** of downtime, and Availability is
 > governed by how *often* stations fault rather than how long each fault lasts.
 
-> **Empty windows:** `findRecord` errors if the query returns no rows. If you
-> select a time range before the simulation started, widen the range.
+> **Empty windows:** `findRecord` errors if the table it is given is empty. The
+> flagged `seed` row above exists precisely to prevent that, so this query returns
+> zeros rather than an error for a range with no data. If you strip the seed row
+> out, re-introduce that failure mode.
 
 ## Step 3: OEE for All Stations
 
@@ -213,6 +270,7 @@ one row per station — ideal for a bar gauge or table panel.
 ```flux
 import "strings"
 import "array"
+import "regexp"
 
 idealCycleTimeMs = 6000.0
 bucket           = "mqtt"
@@ -222,21 +280,25 @@ stop  = v.timeRangeStop
 idealRunningTimeMs = float(v: int(v: stop) - int(v: start)) / 1000000.0
 
 oeeFor = (station) => {
+	stationRx = regexp.compile(v: station)
+
 	writers =
 		from(bucket: bucket)
-			|> range(start: -30d)
+			|> range(start: -2d)
 			|> filter(fn: (r) => r._measurement == "opcua_metadata")
-			|> filter(fn: (r) => strings.containsStr(v: r.metaName, substr: station))
+			|> filter(fn: (r) => r.metaName =~ stationRx)
 			|> keep(columns: ["datasetWriterId"])
 			|> group()
 			|> distinct(column: "datasetWriterId")
 			|> findColumn(fn: (key) => true, column: "_value")
 
+	writersRx = regexp.compile(v: "^(" + strings.joinStr(arr: writers, v: "|") + ")$")
+
 	series = (field) =>
 		from(bucket: bucket)
 			|> range(start: start, stop: stop)
 			|> filter(fn: (r) => r._measurement == "opcua_pubsub" and r._field == field)
-			|> filter(fn: (r) => contains(value: r.datasetWriterId, set: writers))
+			|> filter(fn: (r) => r.datasetWriterId =~ writersRx)
 			|> toFloat()
 			|> group()
 
@@ -254,13 +316,14 @@ oeeFor = (station) => {
 	runTimeMs   = idealRunningTimeMs - faultyMs
 	totalPieces = produced + scrapped
 
-	availability = if idealRunningTimeMs > 0.0 then runTimeMs / idealRunningTimeMs else 0.0
+	availability = if idealRunningTimeMs > 0.0 and runTimeMs > 0.0 then runTimeMs / idealRunningTimeMs else 0.0
 	performance  = if runTimeMs > 0.0 and totalPieces > 0.0 then
 					   idealCycleTimeMs * totalPieces / runTimeMs
 				   else 0.0
 	quality      = if totalPieces > 0.0 then produced / totalPieces else 0.0
+	perfClamped  = if performance > 1.0 then 1.0 else performance
 
-	return availability * performance * quality
+	return availability * perfClamped * quality
 }
 
 array.from(
@@ -271,6 +334,13 @@ array.from(
 	],
 )
 ```
+
+> ⚠️ **This one is deliberately kept simple, and it is slow.** Each `oeeFor()`
+> call runs six `findRecord()` aggregates, and it is invoked three times — so the
+> window is scanned ~18 times. It is readable, and fine in the InfluxDB Data
+> Explorer for a short range, but do **not** put it on a Grafana panel with a long
+> time range. The provisioned dashboard instead uses **three separate gauge
+> panels**, each running the single-station `reduce()` query from Step 2.
 
 > The **MES** is deliberately excluded — it schedules shifts and produces no
 > pieces, so it has no OEE.
@@ -344,27 +414,32 @@ the whole window. This variant computes **hourly** OEE for one station:
 
 ```flux
 import "strings"
+import "regexp"
 
 station          = "assembly"
 idealCycleTimeMs = 6000.0
 bucket           = "mqtt"
 every            = 1h
 
+stationRx = regexp.compile(v: station)
+
 writers =
 	from(bucket: bucket)
-		|> range(start: -30d)
+		|> range(start: -2d)
 		|> filter(fn: (r) => r._measurement == "opcua_metadata")
-		|> filter(fn: (r) => strings.containsStr(v: r.metaName, substr: station))
+		|> filter(fn: (r) => r.metaName =~ stationRx)
 		|> keep(columns: ["datasetWriterId"])
 		|> group()
 		|> distinct(column: "datasetWriterId")
 		|> findColumn(fn: (key) => true, column: "_value")
 
+writersRx = regexp.compile(v: "^(" + strings.joinStr(arr: writers, v: "|") + ")$")
+
 base = (field) =>
 	from(bucket: bucket)
 		|> range(start: v.timeRangeStart, stop: v.timeRangeStop)
 		|> filter(fn: (r) => r._measurement == "opcua_pubsub" and r._field == field)
-		|> filter(fn: (r) => contains(value: r.datasetWriterId, set: writers))
+		|> filter(fn: (r) => r.datasetWriterId =~ writersRx)
 		|> toFloat()
 		|> group()
 
@@ -447,6 +522,32 @@ to your own equipment:
    metadata lookup.
 5. **Define the window as a shift**, not an arbitrary range — availability is
    measured against planned production time.
+
+## Query Performance Notes
+
+The queries above are written the way the provisioned dashboard writes them,
+which is not the most obvious way to express the calculation. Every deviation is
+there because the naive form was measurably too slow on the reference hardware
+(Raspberry Pi 5). If you adapt these queries, keep these three points in mind.
+
+**1. Filter tags with a regex, not `contains()` or `strings.containsStr()`.**
+InfluxDB can push a regex predicate on a *tag* down into the storage engine, so
+only matching series are ever read. `contains()` and `strings.containsStr()` are
+evaluated row-by-row in the Flux interpreter, which forces a full scan and blocks
+all pushdown. This applies to both `metaName` (metadata lookup) and
+`datasetWriterId` (telemetry filter).
+
+**2. `findRecord()` re-executes its entire upstream pipeline, every call.** It is
+not a cheap accessor on an already-computed table. The original Step 2 query
+called it six times over the same window, and the InfluxDB query plan showed the
+corresponding number of identical `ReadRange` branches. Reading the fields once
+and collapsing them with a single `reduce()` is what took that query from **56 s
+to roughly 1 s**.
+
+**3. Keep `aggregateWindow()` directly after the filters.** The planner can only
+fold it into a `ReadWindowAggregate` if nothing sits between them. Inserting
+`keep()`, `map()` or `group()` first silently disables that and pushes every raw
+point through the interpreter — the trend query in Step 6 depends on this.
 
 ---
 

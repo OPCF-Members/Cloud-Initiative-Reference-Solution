@@ -29,6 +29,7 @@ OPC Foundation Cloud Initiative Open-Source Reference Solution
   - ["Your Portainer instance timed out for security purposes"](#your-portainer-instance-timed-out-for-security-purposes)
   - [Single Cluster vs. Split Edge/Cloud Deployment](#single-cluster-vs-split-edgecloud-deployment)
 - [Inspecting the Broker with MQTT Explorer](#inspecting-the-broker-with-mqtt-explorer)
+- [Pre-Provisioned Grafana Dashboards](#pre-provisioned-grafana-dashboards)
 - [Tutorials](#tutorials)
   - [Onboarding an OPC UA Device](./tutorial-onboarding-opcua-device.md)
   - [Onboarding a Non-OPC UA Device](./tutorial-onboarding-non-opcua-device.md)
@@ -217,8 +218,9 @@ end-to-end pipeline from industrial protocols to a time-series database.
   Initialized with org `iot`, bucket `mqtt`, and an admin user set to your
   `IOT_USERNAME`. Includes a web UI (Data Explorer / dashboards).
 - **grafana** — *Grafana* dashboarding & alerting UI with a **pre-provisioned
-  InfluxDB data source** (Flux, org `iot`, bucket `mqtt`) and a **starter dashboard**
-  ("OPC UA Telemetry Overview").
+  InfluxDB data source** (Flux, org `iot`, bucket `mqtt`) and two **pre-provisioned
+  dashboards** ("Production Line OEE" and "Modbus Simulator") — see
+  *Pre-Provisioned Grafana Dashboards*.
 - **ua-cloudaction** — OPC Foundation *UA Cloud Action*, the command & control
   **Requestor**. Polls a configured InfluxDB field and, when it crosses a threshold,
   publishes a `ua-action-request` (MethodCall) to the `commands` topic for Cloud
@@ -237,7 +239,7 @@ end-to-end pipeline from industrial protocols to a time-series database.
 | `ua-cloudpublisher-settings` | ConfigMap | Seeds the Publisher's `settings.json` (broker connection, topics, metadata) and `persistency.json` (published nodes for the simulated line) on first start. |
 | `modbus-simulator` | ConfigMap | The Python Modbus TCP simulation server run by the simulated device. |
 | `modbus-thing-description` | ConfigMap | W3C WoT Thing Description seeded into UA Edge Translator so the Modbus device is onboarded as an OPC UA asset at startup. |
-| `grafana-datasources`, `grafana-dashboard-provider`, `grafana-dashboards` | ConfigMaps | Provision the InfluxDB data source and the starter dashboard. |
+| `grafana-datasources`, `grafana-dashboard-provider`, `grafana-dashboards` | ConfigMaps | Provision the InfluxDB data source and the two dashboards (*Production Line OEE*, *Modbus Simulator*). |
 | `opcua-model-importer` | ConfigMap | Importer script for [loading OPC UA Information Models](./tutorial-import-information-model.md) from the UA Cloud Library. |
 | `portainer-sa-clusteradmin` / `portainer-crb-clusteradmin` | ServiceAccount / ClusterRoleBinding | Grant Portainer in-cluster access to the K3s API server. |
 
@@ -559,6 +561,10 @@ flows all the way through to InfluxDB and Grafana automatically** — a non-OPC 
 device published as OPC UA PubSub with zero manual configuration, enabling
 **fully automatic asset onboarding**!
 
+All eight tags are charted out of the box on the pre-provisioned **Modbus
+Simulator** dashboard — see [Pre-Provisioned Grafana
+Dashboards](#pre-provisioned-grafana-dashboards).
+
 > **Use this as your template.** To onboard a *real* Modbus (or BACnet, S7,
 > Rockwell, OPC DA, …) device, copy this ConfigMap, change `base` to your device's
 > address and edit the register addresses/types — no code, no rebuild. Remember to
@@ -648,7 +654,7 @@ Replace `<device-ip>` with the CM5's IP address (from `ip addr` or
 | **UA Cloud Publisher** | `http://<device-ip>:8081` | Configure which OPC UA nodes to publish and the MQTT broker target (`mosquitto.cloud.svc.cluster.local:8883`, TLS). Log in with the `IOT_USERNAME` / `IOT_PASSWORD` you set (exposed via the manifest `PUBLISHER_USERNAME` / `PUBLISHER_PASSWORD` env vars). |
 | **InfluxDB** | `http://<device-ip>:8086` | Time-series UI, Data Explorer, and dashboards. Log in with the `IOT_USERNAME` / `IOT_PASSWORD` you set (org `iot`, bucket `mqtt`). |
 | **Portainer** | `https://<device-ip>:9443` | Kubernetes management UI for the K3s cluster. On first access you set the admin password (see *Managing the Cluster with Portainer*). |
-| **Grafana** | `http://<device-ip>:3000` | Dashboards & alerting. Log in with the `IOT_USERNAME` / `IOT_PASSWORD` you set. The InfluxDB data source and a starter dashboard are pre-provisioned (see *Dashboards with Grafana*). |
+| **Grafana** | `http://<device-ip>:3000` | Dashboards & alerting. Log in with the `IOT_USERNAME` / `IOT_PASSWORD` you set. The InfluxDB data source and two dashboards (*Production Line OEE*, *Modbus Simulator*) are pre-provisioned (see *Pre-Provisioned Grafana Dashboards*). |
 | **UA Cloud Action** | `http://<device-ip>:8082` | Status UI for the automated feedback loop (data-source, broker, and Commander connectivity) and OPC UA Web API. Log in with the `IOT_USERNAME` / `IOT_PASSWORD` you set (see *Automated Feedback Loop with UA Cloud Action*). |
 | **MQTT Explorer** | `http://<device-ip>:4000` | **Web UI for the Mosquitto broker** — browse the live topic tree, inspect the OPC UA PubSub payloads on `data/#` and `metadata`, and publish messages by hand (handy for driving UA Cloud Commander on `commands`). The broker connection is entered in the UI — see *Inspecting the Broker with MQTT Explorer*. ⚠️ **No built-in authentication.** |
 
@@ -804,6 +810,17 @@ Once connected you will see the live topic tree:
 > kubectl scale deployment/mqtt-explorer -n cloud --replicas=0
 > ```
 
+## Pre-Provisioned Grafana Dashboards
+
+Two dashboards are provisioned automatically from the `grafana-dashboards`
+ConfigMap in [`cloud.yaml`](./cloud.yaml) and appear under **Dashboards** in
+Grafana without any manual import.
+
+| Dashboard | UID | What it shows |
+|---|---|---|
+| **Production Line OEE** | `production-line-oee` | Availability / Performance / Quality gauges, OEE, status and product counts for the simulated production line. Has a **Station** dropdown (`assembly`, `test`, `packaging`). This is also the Grafana home dashboard. |
+| **Modbus Simulator** | `modbus-simulator` | All 8 tags of the simulated Modbus TCP device, onboarded through UA Edge Translator (see *Simulated Modbus TCP Device*). |
+
 ## Tutorials
 
 Step-by-step guides live in their own files to keep this README readable:
@@ -813,7 +830,7 @@ Step-by-step guides live in their own files to keep this README readable:
 | [Onboarding an OPC UA Device](./tutorial-onboarding-opcua-device.md) | Connect UA Cloud Publisher to an OPC UA server and publish its nodes. |
 | [Onboarding a Non-OPC UA Device](./tutorial-onboarding-non-opcua-device.md) | Map a non-OPC UA asset into OPC UA with a W3C WoT Thing Description. |
 | [Querying Data in the InfluxDB Dashboard](./tutorial-influxdb-queries.md) | Explore the telemetry with Flux queries and build InfluxDB dashboards. |
-| [Dashboards with Grafana](./tutorial-grafana-dashboards.md) | Use the pre-provisioned InfluxDB data source and starter dashboard. |
+| [Dashboards with Grafana](./tutorial-grafana-dashboards.md) | Use the pre-provisioned InfluxDB data source and dashboards. |
 | [Calculating OEE](./tutorial-oee.md) | Compute Availability, Performance, Quality and OEE per station and for the whole line, and chart it in Grafana. |
 | [Importing an OPC UA Information Model](./tutorial-import-information-model.md) | Load a model from the UA Cloud Library into InfluxDB. |
 | [Command & Control with UA Cloud Commander](./tutorial-command-and-control.md) | Send OPC UA Actions over MQTT and close the digital feedback loop. |

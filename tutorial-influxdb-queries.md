@@ -12,7 +12,7 @@ that query data using the **Flux** language.
 
 **Start simple and build up.** The join below is the end goal, but if it returns
 nothing, work through these steps first — each one narrows down where the data
-stops.
+stops. *Filtering by station* and the performance notes then follow.
 
 ### Step 1: Is anything in the bucket at all?
 
@@ -81,7 +81,7 @@ data =
 
 meta =
   from(bucket: "mqtt")
-    |> range(start: -30d)
+    |> range(start: -2d)                       // ← see the note on lookback below
     |> filter(fn: (r) =>
       r._measurement == "opcua_metadata" and
       r._field == "cfgMajor"
@@ -109,13 +109,57 @@ join(tables: {d: data, m: meta}, on: ["datasetWriterId"], method: "inner")
 >
 > ```flux
 > from(bucket: "mqtt")
->   |> range(start: -30d)
+>   |> range(start: -2d)
 >   |> filter(fn: (r) => r._measurement == "opcua_metadata")
 >   |> keep(columns: ["datasetWriterId", "metaName"])
 >   |> group()
 >   |> distinct(column: "datasetWriterId")
 > ```
 
+> **Choosing the metadata lookback.** The `meta` range is a resilience dial, not a
+> performance one: it is effectively *how long the Publisher may stop publishing
+> metadata before this query returns nothing*. `-2d` matches the provisioned
+> Grafana dashboards. Shortening it to something like `-1h` looks harmless and is
+> the usual cause of a join that worked yesterday and returns nothing today.
+
+### Filtering by station
+
+`datasetWriterId` is an opaque numeric hash, so to select a specific station you
+look its writers up in `opcua_metadata` first — the `metaName` tag holds
+`<ApplicationUri>;<NodeId>`, and the application URI contains the station name:
+
+```flux
+import "strings"
+import "regexp"
+
+station   = "assembly"
+stationRx = regexp.compile(v: station)
+
+writers =
+  from(bucket: "mqtt")
+    |> range(start: -2d)
+    |> filter(fn: (r) => r._measurement == "opcua_metadata")
+    |> filter(fn: (r) => r.metaName =~ stationRx)
+    |> keep(columns: ["datasetWriterId"])
+    |> group()
+    |> distinct(column: "datasetWriterId")
+    |> findColumn(fn: (key) => true, column: "_value")
+
+writersRx = regexp.compile(v: "^(" + strings.joinStr(arr: writers, v: "|") + ")$")
+
+from(bucket: "mqtt")
+  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)
+  |> filter(fn: (r) => r._measurement == "opcua_pubsub" and r._field == "Payload_Pressure_Value")
+  |> filter(fn: (r) => r.datasetWriterId =~ writersRx)
+```
+
+> **Use a regex to filter tags, not `contains()` or `strings.containsStr()`.**
+> InfluxDB pushes a regex predicate on a *tag* down into the storage engine, so
+> only matching series are read. `contains()` and `strings.containsStr()` are
+> evaluated row-by-row in Flux and force a full scan. On the reference hardware
+> this distinction was worth tens of seconds per panel. The same pattern is used
+> by every provisioned dashboard query — see
+> [Calculating OEE](./tutorial-oee.md#query-performance-notes).
 
 > **Tip:** Use the Data Explorer's visual **Query Builder** to discover the exact
 > `_field` names available (they mirror the OPC UA PubSub payload keys, e.g.
