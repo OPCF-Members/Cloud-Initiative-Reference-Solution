@@ -330,6 +330,15 @@ spec:
               # file 0600 owned by whoever runs this script, so without the chown/chmod
               # below the broker fails with:
               #   Error: Unable to open pwfile "/mosquitto/data/passwd".
+              #
+              # Mosquitto 2.1 CHANGED mosquitto_passwd -c: it now refuses to overwrite
+              # an existing file, failing with
+              #   Error: Unable to open file /mosquitto/data/passwd for writing. File exists.
+              # whereas 2.0 replaced it silently. /mosquitto is a hostPath, so the file
+              # survives pod restarts - delete it first so the credentials are always
+              # regenerated from MOSQUITTO_USERNAME/MOSQUITTO_PASSWORD and stay in sync
+              # with whatever was supplied at apply time.
+              rm -f /mosquitto/data/passwd
               mosquitto_passwd -b -c /mosquitto/data/passwd "$MOSQUITTO_USERNAME" "$MOSQUITTO_PASSWORD"
               chown 1883:1883 /mosquitto/data/passwd || true
               chmod 0640 /mosquitto/data/passwd
