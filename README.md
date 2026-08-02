@@ -338,8 +338,11 @@ kubectl get nodes
    >
    > ```bash
    > export INFLUX_TOKEN="$(kubectl get secret influxdb-auth -n cloud \
-   >   -o jsonpath='{.data.INFLUX_TOKEN}' | base64 -d)"
+   >   -o go-template='{{.data.INFLUX_TOKEN | base64decode}}')"
    > ```
+   >
+   > `base64decode` runs inside the Go template, so this needs no external `base64`
+   > binary and works the same from Linux, macOS and Windows PowerShell.
    >
    > **Always do this before re-applying the manifests.** Generating a fresh token
    > only rewrites the Secret — InfluxDB keeps the admin token it was initialised
@@ -399,7 +402,16 @@ Related OPC UA telemetry persistence paths are also mapped as `hostPath` volumes
 > `influxdb-auth` Secret:
 >
 > ```bash
-> kubectl get secret influxdb-auth -n cloud -o jsonpath='{.data.INFLUX_TOKEN}' | base64 -d; echo
+> kubectl get secret influxdb-auth -n cloud -o go-template='{{.data.INFLUX_TOKEN | base64decode}}'; echo
+> ```
+>
+> `base64decode` runs inside the Go template, so this needs no external `base64`
+> binary and works the same from Linux, macOS and Windows PowerShell. Use the
+> token to query the API directly, for example to list the buckets:
+>
+> ```bash
+> TOKEN=$(kubectl get secret influxdb-auth -n cloud -o go-template='{{.data.INFLUX_TOKEN | base64decode}}')
+> kubectl exec -n cloud deploy/influxdb -- influx bucket list --org iot --token "$TOKEN"
 > ```
 >
 > This is an **all-access admin token**: it can read and delete every bucket in
