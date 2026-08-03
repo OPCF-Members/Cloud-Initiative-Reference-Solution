@@ -692,6 +692,17 @@ metadata:
   namespace: cloud
 spec:
   replicas: 1
+  # Both mqtt_consumer inputs use a FIXED client_id (telegraf-mqtt-data /
+  # telegraf-mqtt-metadata). MQTT allows only one session per client id, so the
+  # broker disconnects the older client the moment a second one connects with
+  # the same id. The default RollingUpdate strategy starts the replacement pod
+  # BEFORE terminating the old one, so during every rollout two pods fight over
+  # the same two client ids and each kicks the other off in a loop - visible as
+  #   Connected [ssl://mosquitto...] / Error in plugin: connection lost: EOF
+  # repeating every few seconds, with no data reaching InfluxDB.
+  # Recreate terminates the old pod first, so the ids are never contended.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: telegraf
@@ -2022,31 +2033,21 @@ data:
       "panels": [
         {
           "id": 1,
-          "type": "timeseries",
-          "title": "Connected to broker",
+          "type": "stat",
+          "title": "Broker connection",
           "datasource": {
             "type": "influxdb",
             "uid": "influxdb"
           },
           "gridPos": {
-            "h": 8,
-            "w": 12,
+            "h": 4,
+            "w": 6,
             "x": 0,
             "y": 0
           },
           "fieldConfig": {
             "defaults": {
               "unit": "none",
-              "custom": {
-                "drawStyle": "line",
-                "lineWidth": 2,
-                "fillOpacity": 20,
-                "showPoints": "never",
-                "spanNulls": true,
-                "lineInterpolation": "stepAfter",
-                "axisSoftMin": 0,
-                "axisSoftMax": 1
-              },
               "mappings": [
                 {
                   "type": "value",
@@ -2063,20 +2064,36 @@ data:
                     }
                   }
                 }
-              ]
+              ],
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "red",
+                    "value": null
+                  },
+                  {
+                    "color": "green",
+                    "value": 1
+                  }
+                ]
+              }
             },
             "overrides": [
             ]
           },
           "options": {
-            "legend": {
-              "displayMode": "list",
-              "placement": "bottom",
-              "showLegend": false
-            },
-            "tooltip": {
-              "mode": "single",
-              "sort": "none"
+            "colorMode": "background",
+            "graphMode": "none",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "textMode": "auto",
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
             }
           },
           "targets": [
@@ -2085,48 +2102,54 @@ data:
                 "type": "influxdb",
                 "uid": "influxdb"
               },
-              "query": "import \"strings\"\nimport \"regexp\"\n\n// The Publisher publishes its own diagnostics as OPC UA nodes under\n// nsu=http://opcfoundation.org/UA/CloudPublisher/ (see Diagnostics.cs), so the\n// writer lookup keys on that namespace instead of a production line station.\npublisherRx = regexp.compile(v: \"CloudPublisher\")\n\nwriters =\n  from(bucket: \"mqtt\")\n  |\u003e range(start: -2d)\n  |\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_metadata\")\n  |\u003e filter(fn: (r) =\u003e r.metaName =~ publisherRx)\n  |\u003e keep(columns: [\"datasetWriterId\"])\n  |\u003e group()\n  |\u003e distinct(column: \"datasetWriterId\")\n  |\u003e findColumn(fn: (key) =\u003e true, column: \"_value\")\n\nwritersRx = regexp.compile(v: \"^(\" + strings.joinStr(arr: writers, v: \"|\") + \")$\")\n\nfrom(bucket: \"mqtt\")\n  |\u003e range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_pubsub\" and r._field == \"Payload_ConnectedToBroker_Value\")\n  |\u003e filter(fn: (r) =\u003e r.datasetWriterId =~ writersRx)\n  |\u003e aggregateWindow(every: v.windowPeriod, fn: last, createEmpty: false)\n  |\u003e group()\n  |\u003e aggregateWindow(every: v.windowPeriod, fn: last, createEmpty: false)\n  |\u003e map(fn: (r) =\u003e ({_time: r._time, _value: if r._value then 1.0 else 0.0}))\n  |\u003e keep(columns: [\"_time\", \"_value\"])\n  |\u003e yield(name: \"connectedtobroker\")",
+              "query": "import \"strings\"\nimport \"regexp\"\n\n// The Publisher publishes its own diagnostics as OPC UA nodes under\n// nsu=http://opcfoundation.org/UA/CloudPublisher/ (Diagnostics.cs), so the\n// writer lookup keys on that namespace rather than a production line station.\npublisherRx = regexp.compile(v: \"CloudPublisher\")\n\nwriters =\n  from(bucket: \"mqtt\")\n  |\u003e range(start: -2d)\n  |\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_metadata\")\n  |\u003e filter(fn: (r) =\u003e r.metaName =~ publisherRx)\n  |\u003e keep(columns: [\"datasetWriterId\"])\n  |\u003e group()\n  |\u003e distinct(column: \"datasetWriterId\")\n  |\u003e findColumn(fn: (key) =\u003e true, column: \"_value\")\n\nwritersRx = regexp.compile(v: \"^(\" + strings.joinStr(arr: writers, v: \"|\") + \")$\")\n\nfrom(bucket: \"mqtt\")\n  |\u003e range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_pubsub\" and r._field == \"Payload_ConnectedToBroker_Value\")\n  |\u003e filter(fn: (r) =\u003e r.datasetWriterId =~ writersRx)\n  |\u003e map(fn: (r) =\u003e ({r with _value: if r._value == \"true\" or r._value == \"True\" or r._value == \"1\" then 1.0 else 0.0}))\n  |\u003e group()\n  |\u003e last()\n  |\u003e keep(columns: [\"_time\", \"_value\"])\n  |\u003e yield(name: \"connectedtobroker\")",
               "refId": "A"
             }
           ]
         },
         {
           "id": 2,
-          "type": "timeseries",
+          "type": "stat",
           "title": "OPC UA sessions",
           "datasource": {
             "type": "influxdb",
             "uid": "influxdb"
           },
           "gridPos": {
-            "h": 8,
-            "w": 12,
-            "x": 12,
+            "h": 4,
+            "w": 6,
+            "x": 6,
             "y": 0
           },
           "fieldConfig": {
             "defaults": {
               "unit": "none",
-              "custom": {
-                "drawStyle": "line",
-                "lineWidth": 2,
-                "fillOpacity": 10,
-                "showPoints": "never",
-                "spanNulls": true
-              }
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "text",
+                    "value": null
+                  }
+                ]
+              },
+              "decimals": 0
             },
             "overrides": [
             ]
           },
           "options": {
-            "legend": {
-              "displayMode": "list",
-              "placement": "bottom",
-              "showLegend": false
-            },
-            "tooltip": {
-              "mode": "single",
-              "sort": "none"
+            "colorMode": "value",
+            "graphMode": "none",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "textMode": "auto",
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
             }
           },
           "targets": [
@@ -2135,48 +2158,54 @@ data:
                 "type": "influxdb",
                 "uid": "influxdb"
               },
-              "query": "import \"strings\"\nimport \"regexp\"\n\n// The Publisher publishes its own diagnostics as OPC UA nodes under\n// nsu=http://opcfoundation.org/UA/CloudPublisher/ (see Diagnostics.cs), so the\n// writer lookup keys on that namespace instead of a production line station.\npublisherRx = regexp.compile(v: \"CloudPublisher\")\n\nwriters =\n  from(bucket: \"mqtt\")\n  |\u003e range(start: -2d)\n  |\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_metadata\")\n  |\u003e filter(fn: (r) =\u003e r.metaName =~ publisherRx)\n  |\u003e keep(columns: [\"datasetWriterId\"])\n  |\u003e group()\n  |\u003e distinct(column: \"datasetWriterId\")\n  |\u003e findColumn(fn: (key) =\u003e true, column: \"_value\")\n\nwritersRx = regexp.compile(v: \"^(\" + strings.joinStr(arr: writers, v: \"|\") + \")$\")\n\nfrom(bucket: \"mqtt\")\n  |\u003e range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_pubsub\" and r._field == \"Payload_NumOpcSessions_Value\")\n  |\u003e filter(fn: (r) =\u003e r.datasetWriterId =~ writersRx)\n  |\u003e aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |\u003e group()\n  |\u003e aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |\u003e map(fn: (r) =\u003e ({_time: r._time, _value: float(v: r._value)}))\n  |\u003e keep(columns: [\"_time\", \"_value\"])\n  |\u003e yield(name: \"numopcsessions\")",
+              "query": "import \"strings\"\nimport \"regexp\"\n\n// The Publisher publishes its own diagnostics as OPC UA nodes under\n// nsu=http://opcfoundation.org/UA/CloudPublisher/ (Diagnostics.cs), so the\n// writer lookup keys on that namespace rather than a production line station.\npublisherRx = regexp.compile(v: \"CloudPublisher\")\n\nwriters =\n  from(bucket: \"mqtt\")\n  |\u003e range(start: -2d)\n  |\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_metadata\")\n  |\u003e filter(fn: (r) =\u003e r.metaName =~ publisherRx)\n  |\u003e keep(columns: [\"datasetWriterId\"])\n  |\u003e group()\n  |\u003e distinct(column: \"datasetWriterId\")\n  |\u003e findColumn(fn: (key) =\u003e true, column: \"_value\")\n\nwritersRx = regexp.compile(v: \"^(\" + strings.joinStr(arr: writers, v: \"|\") + \")$\")\n\nfrom(bucket: \"mqtt\")\n  |\u003e range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_pubsub\" and r._field == \"Payload_NumOpcSessions_Value\")\n  |\u003e filter(fn: (r) =\u003e r.datasetWriterId =~ writersRx)\n  |\u003e map(fn: (r) =\u003e ({r with _value: float(v: r._value)}))\n  |\u003e group()\n  |\u003e last()\n  |\u003e keep(columns: [\"_time\", \"_value\"])\n  |\u003e yield(name: \"numopcsessions\")",
               "refId": "A"
             }
           ]
         },
         {
           "id": 3,
-          "type": "timeseries",
+          "type": "stat",
           "title": "OPC UA subscriptions",
           "datasource": {
             "type": "influxdb",
             "uid": "influxdb"
           },
           "gridPos": {
-            "h": 8,
-            "w": 12,
-            "x": 0,
-            "y": 8
+            "h": 4,
+            "w": 6,
+            "x": 12,
+            "y": 0
           },
           "fieldConfig": {
             "defaults": {
               "unit": "none",
-              "custom": {
-                "drawStyle": "line",
-                "lineWidth": 2,
-                "fillOpacity": 10,
-                "showPoints": "never",
-                "spanNulls": true
-              }
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "text",
+                    "value": null
+                  }
+                ]
+              },
+              "decimals": 0
             },
             "overrides": [
             ]
           },
           "options": {
-            "legend": {
-              "displayMode": "list",
-              "placement": "bottom",
-              "showLegend": false
-            },
-            "tooltip": {
-              "mode": "single",
-              "sort": "none"
+            "colorMode": "value",
+            "graphMode": "none",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "textMode": "auto",
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
             }
           },
           "targets": [
@@ -2185,48 +2214,54 @@ data:
                 "type": "influxdb",
                 "uid": "influxdb"
               },
-              "query": "import \"strings\"\nimport \"regexp\"\n\n// The Publisher publishes its own diagnostics as OPC UA nodes under\n// nsu=http://opcfoundation.org/UA/CloudPublisher/ (see Diagnostics.cs), so the\n// writer lookup keys on that namespace instead of a production line station.\npublisherRx = regexp.compile(v: \"CloudPublisher\")\n\nwriters =\n  from(bucket: \"mqtt\")\n  |\u003e range(start: -2d)\n  |\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_metadata\")\n  |\u003e filter(fn: (r) =\u003e r.metaName =~ publisherRx)\n  |\u003e keep(columns: [\"datasetWriterId\"])\n  |\u003e group()\n  |\u003e distinct(column: \"datasetWriterId\")\n  |\u003e findColumn(fn: (key) =\u003e true, column: \"_value\")\n\nwritersRx = regexp.compile(v: \"^(\" + strings.joinStr(arr: writers, v: \"|\") + \")$\")\n\nfrom(bucket: \"mqtt\")\n  |\u003e range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_pubsub\" and r._field == \"Payload_NumOpcSubscriptions_Value\")\n  |\u003e filter(fn: (r) =\u003e r.datasetWriterId =~ writersRx)\n  |\u003e aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |\u003e group()\n  |\u003e aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |\u003e map(fn: (r) =\u003e ({_time: r._time, _value: float(v: r._value)}))\n  |\u003e keep(columns: [\"_time\", \"_value\"])\n  |\u003e yield(name: \"numopcsubscriptions\")",
+              "query": "import \"strings\"\nimport \"regexp\"\n\n// The Publisher publishes its own diagnostics as OPC UA nodes under\n// nsu=http://opcfoundation.org/UA/CloudPublisher/ (Diagnostics.cs), so the\n// writer lookup keys on that namespace rather than a production line station.\npublisherRx = regexp.compile(v: \"CloudPublisher\")\n\nwriters =\n  from(bucket: \"mqtt\")\n  |\u003e range(start: -2d)\n  |\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_metadata\")\n  |\u003e filter(fn: (r) =\u003e r.metaName =~ publisherRx)\n  |\u003e keep(columns: [\"datasetWriterId\"])\n  |\u003e group()\n  |\u003e distinct(column: \"datasetWriterId\")\n  |\u003e findColumn(fn: (key) =\u003e true, column: \"_value\")\n\nwritersRx = regexp.compile(v: \"^(\" + strings.joinStr(arr: writers, v: \"|\") + \")$\")\n\nfrom(bucket: \"mqtt\")\n  |\u003e range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_pubsub\" and r._field == \"Payload_NumOpcSubscriptions_Value\")\n  |\u003e filter(fn: (r) =\u003e r.datasetWriterId =~ writersRx)\n  |\u003e map(fn: (r) =\u003e ({r with _value: float(v: r._value)}))\n  |\u003e group()\n  |\u003e last()\n  |\u003e keep(columns: [\"_time\", \"_value\"])\n  |\u003e yield(name: \"numopcsubscriptions\")",
               "refId": "A"
             }
           ]
         },
         {
           "id": 4,
-          "type": "timeseries",
+          "type": "stat",
           "title": "OPC UA monitored items",
           "datasource": {
             "type": "influxdb",
             "uid": "influxdb"
           },
           "gridPos": {
-            "h": 8,
-            "w": 12,
-            "x": 12,
-            "y": 8
+            "h": 4,
+            "w": 6,
+            "x": 18,
+            "y": 0
           },
           "fieldConfig": {
             "defaults": {
               "unit": "none",
-              "custom": {
-                "drawStyle": "line",
-                "lineWidth": 2,
-                "fillOpacity": 10,
-                "showPoints": "never",
-                "spanNulls": true
-              }
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "text",
+                    "value": null
+                  }
+                ]
+              },
+              "decimals": 0
             },
             "overrides": [
             ]
           },
           "options": {
-            "legend": {
-              "displayMode": "list",
-              "placement": "bottom",
-              "showLegend": false
-            },
-            "tooltip": {
-              "mode": "single",
-              "sort": "none"
+            "colorMode": "value",
+            "graphMode": "none",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "textMode": "auto",
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
             }
           },
           "targets": [
@@ -2235,48 +2270,54 @@ data:
                 "type": "influxdb",
                 "uid": "influxdb"
               },
-              "query": "import \"strings\"\nimport \"regexp\"\n\n// The Publisher publishes its own diagnostics as OPC UA nodes under\n// nsu=http://opcfoundation.org/UA/CloudPublisher/ (see Diagnostics.cs), so the\n// writer lookup keys on that namespace instead of a production line station.\npublisherRx = regexp.compile(v: \"CloudPublisher\")\n\nwriters =\n  from(bucket: \"mqtt\")\n  |\u003e range(start: -2d)\n  |\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_metadata\")\n  |\u003e filter(fn: (r) =\u003e r.metaName =~ publisherRx)\n  |\u003e keep(columns: [\"datasetWriterId\"])\n  |\u003e group()\n  |\u003e distinct(column: \"datasetWriterId\")\n  |\u003e findColumn(fn: (key) =\u003e true, column: \"_value\")\n\nwritersRx = regexp.compile(v: \"^(\" + strings.joinStr(arr: writers, v: \"|\") + \")$\")\n\nfrom(bucket: \"mqtt\")\n  |\u003e range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_pubsub\" and r._field == \"Payload_NumOpcMonitoredItems_Value\")\n  |\u003e filter(fn: (r) =\u003e r.datasetWriterId =~ writersRx)\n  |\u003e aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |\u003e group()\n  |\u003e aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |\u003e map(fn: (r) =\u003e ({_time: r._time, _value: float(v: r._value)}))\n  |\u003e keep(columns: [\"_time\", \"_value\"])\n  |\u003e yield(name: \"numopcmonitoreditems\")",
+              "query": "import \"strings\"\nimport \"regexp\"\n\n// The Publisher publishes its own diagnostics as OPC UA nodes under\n// nsu=http://opcfoundation.org/UA/CloudPublisher/ (Diagnostics.cs), so the\n// writer lookup keys on that namespace rather than a production line station.\npublisherRx = regexp.compile(v: \"CloudPublisher\")\n\nwriters =\n  from(bucket: \"mqtt\")\n  |\u003e range(start: -2d)\n  |\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_metadata\")\n  |\u003e filter(fn: (r) =\u003e r.metaName =~ publisherRx)\n  |\u003e keep(columns: [\"datasetWriterId\"])\n  |\u003e group()\n  |\u003e distinct(column: \"datasetWriterId\")\n  |\u003e findColumn(fn: (key) =\u003e true, column: \"_value\")\n\nwritersRx = regexp.compile(v: \"^(\" + strings.joinStr(arr: writers, v: \"|\") + \")$\")\n\nfrom(bucket: \"mqtt\")\n  |\u003e range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_pubsub\" and r._field == \"Payload_NumOpcMonitoredItems_Value\")\n  |\u003e filter(fn: (r) =\u003e r.datasetWriterId =~ writersRx)\n  |\u003e map(fn: (r) =\u003e ({r with _value: float(v: r._value)}))\n  |\u003e group()\n  |\u003e last()\n  |\u003e keep(columns: [\"_time\", \"_value\"])\n  |\u003e yield(name: \"numopcmonitoreditems\")",
               "refId": "A"
             }
           ]
         },
         {
           "id": 5,
-          "type": "timeseries",
+          "type": "stat",
           "title": "Internal queue depth",
           "datasource": {
             "type": "influxdb",
             "uid": "influxdb"
           },
           "gridPos": {
-            "h": 8,
-            "w": 12,
+            "h": 4,
+            "w": 6,
             "x": 0,
-            "y": 16
+            "y": 4
           },
           "fieldConfig": {
             "defaults": {
               "unit": "none",
-              "custom": {
-                "drawStyle": "line",
-                "lineWidth": 2,
-                "fillOpacity": 10,
-                "showPoints": "never",
-                "spanNulls": true
-              }
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "text",
+                    "value": null
+                  }
+                ]
+              },
+              "decimals": 0
             },
             "overrides": [
             ]
           },
           "options": {
-            "legend": {
-              "displayMode": "list",
-              "placement": "bottom",
-              "showLegend": false
-            },
-            "tooltip": {
-              "mode": "single",
-              "sort": "none"
+            "colorMode": "value",
+            "graphMode": "none",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "textMode": "auto",
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
             }
           },
           "targets": [
@@ -2285,48 +2326,58 @@ data:
                 "type": "influxdb",
                 "uid": "influxdb"
               },
-              "query": "import \"strings\"\nimport \"regexp\"\n\n// The Publisher publishes its own diagnostics as OPC UA nodes under\n// nsu=http://opcfoundation.org/UA/CloudPublisher/ (see Diagnostics.cs), so the\n// writer lookup keys on that namespace instead of a production line station.\npublisherRx = regexp.compile(v: \"CloudPublisher\")\n\nwriters =\n  from(bucket: \"mqtt\")\n  |\u003e range(start: -2d)\n  |\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_metadata\")\n  |\u003e filter(fn: (r) =\u003e r.metaName =~ publisherRx)\n  |\u003e keep(columns: [\"datasetWriterId\"])\n  |\u003e group()\n  |\u003e distinct(column: \"datasetWriterId\")\n  |\u003e findColumn(fn: (key) =\u003e true, column: \"_value\")\n\nwritersRx = regexp.compile(v: \"^(\" + strings.joinStr(arr: writers, v: \"|\") + \")$\")\n\nfrom(bucket: \"mqtt\")\n  |\u003e range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_pubsub\" and r._field == \"Payload_QueueCount_Value\")\n  |\u003e filter(fn: (r) =\u003e r.datasetWriterId =~ writersRx)\n  |\u003e aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |\u003e group()\n  |\u003e aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |\u003e map(fn: (r) =\u003e ({_time: r._time, _value: float(v: r._value)}))\n  |\u003e keep(columns: [\"_time\", \"_value\"])\n  |\u003e yield(name: \"queuecount\")",
+              "query": "import \"strings\"\nimport \"regexp\"\n\n// The Publisher publishes its own diagnostics as OPC UA nodes under\n// nsu=http://opcfoundation.org/UA/CloudPublisher/ (Diagnostics.cs), so the\n// writer lookup keys on that namespace rather than a production line station.\npublisherRx = regexp.compile(v: \"CloudPublisher\")\n\nwriters =\n  from(bucket: \"mqtt\")\n  |\u003e range(start: -2d)\n  |\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_metadata\")\n  |\u003e filter(fn: (r) =\u003e r.metaName =~ publisherRx)\n  |\u003e keep(columns: [\"datasetWriterId\"])\n  |\u003e group()\n  |\u003e distinct(column: \"datasetWriterId\")\n  |\u003e findColumn(fn: (key) =\u003e true, column: \"_value\")\n\nwritersRx = regexp.compile(v: \"^(\" + strings.joinStr(arr: writers, v: \"|\") + \")$\")\n\nfrom(bucket: \"mqtt\")\n  |\u003e range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_pubsub\" and r._field == \"Payload_QueueCount_Value\")\n  |\u003e filter(fn: (r) =\u003e r.datasetWriterId =~ writersRx)\n  |\u003e map(fn: (r) =\u003e ({r with _value: float(v: r._value)}))\n  |\u003e group()\n  |\u003e last()\n  |\u003e keep(columns: [\"_time\", \"_value\"])\n  |\u003e yield(name: \"queuecount\")",
               "refId": "A"
             }
           ]
         },
         {
           "id": 6,
-          "type": "timeseries",
-          "title": "Enqueue failures (cumulative)",
+          "type": "stat",
+          "title": "Enqueue failures",
           "datasource": {
             "type": "influxdb",
             "uid": "influxdb"
           },
           "gridPos": {
-            "h": 8,
-            "w": 12,
-            "x": 12,
-            "y": 16
+            "h": 4,
+            "w": 6,
+            "x": 6,
+            "y": 4
           },
           "fieldConfig": {
             "defaults": {
               "unit": "none",
-              "custom": {
-                "drawStyle": "line",
-                "lineWidth": 2,
-                "fillOpacity": 10,
-                "showPoints": "never",
-                "spanNulls": true
-              }
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "red",
+                    "value": 1
+                  }
+                ]
+              },
+              "decimals": 0
             },
             "overrides": [
             ]
           },
           "options": {
-            "legend": {
-              "displayMode": "list",
-              "placement": "bottom",
-              "showLegend": false
-            },
-            "tooltip": {
-              "mode": "single",
-              "sort": "none"
+            "colorMode": "value",
+            "graphMode": "none",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "textMode": "auto",
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
             }
           },
           "targets": [
@@ -2335,48 +2386,58 @@ data:
                 "type": "influxdb",
                 "uid": "influxdb"
               },
-              "query": "import \"strings\"\nimport \"regexp\"\n\n// The Publisher publishes its own diagnostics as OPC UA nodes under\n// nsu=http://opcfoundation.org/UA/CloudPublisher/ (see Diagnostics.cs), so the\n// writer lookup keys on that namespace instead of a production line station.\npublisherRx = regexp.compile(v: \"CloudPublisher\")\n\nwriters =\n  from(bucket: \"mqtt\")\n  |\u003e range(start: -2d)\n  |\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_metadata\")\n  |\u003e filter(fn: (r) =\u003e r.metaName =~ publisherRx)\n  |\u003e keep(columns: [\"datasetWriterId\"])\n  |\u003e group()\n  |\u003e distinct(column: \"datasetWriterId\")\n  |\u003e findColumn(fn: (key) =\u003e true, column: \"_value\")\n\nwritersRx = regexp.compile(v: \"^(\" + strings.joinStr(arr: writers, v: \"|\") + \")$\")\n\nfrom(bucket: \"mqtt\")\n  |\u003e range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_pubsub\" and r._field == \"Payload_EnqueueFailures_Value\")\n  |\u003e filter(fn: (r) =\u003e r.datasetWriterId =~ writersRx)\n  |\u003e aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |\u003e group()\n  |\u003e aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |\u003e map(fn: (r) =\u003e ({_time: r._time, _value: float(v: r._value)}))\n  |\u003e keep(columns: [\"_time\", \"_value\"])\n  |\u003e yield(name: \"enqueuefailures\")",
+              "query": "import \"strings\"\nimport \"regexp\"\n\n// The Publisher publishes its own diagnostics as OPC UA nodes under\n// nsu=http://opcfoundation.org/UA/CloudPublisher/ (Diagnostics.cs), so the\n// writer lookup keys on that namespace rather than a production line station.\npublisherRx = regexp.compile(v: \"CloudPublisher\")\n\nwriters =\n  from(bucket: \"mqtt\")\n  |\u003e range(start: -2d)\n  |\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_metadata\")\n  |\u003e filter(fn: (r) =\u003e r.metaName =~ publisherRx)\n  |\u003e keep(columns: [\"datasetWriterId\"])\n  |\u003e group()\n  |\u003e distinct(column: \"datasetWriterId\")\n  |\u003e findColumn(fn: (key) =\u003e true, column: \"_value\")\n\nwritersRx = regexp.compile(v: \"^(\" + strings.joinStr(arr: writers, v: \"|\") + \")$\")\n\nfrom(bucket: \"mqtt\")\n  |\u003e range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_pubsub\" and r._field == \"Payload_EnqueueFailures_Value\")\n  |\u003e filter(fn: (r) =\u003e r.datasetWriterId =~ writersRx)\n  |\u003e map(fn: (r) =\u003e ({r with _value: float(v: r._value)}))\n  |\u003e group()\n  |\u003e last()\n  |\u003e keep(columns: [\"_time\", \"_value\"])\n  |\u003e yield(name: \"enqueuefailures\")",
               "refId": "A"
             }
           ]
         },
         {
           "id": 7,
-          "type": "timeseries",
-          "title": "Messages sent (cumulative)",
+          "type": "stat",
+          "title": "Send failures",
           "datasource": {
             "type": "influxdb",
             "uid": "influxdb"
           },
           "gridPos": {
-            "h": 8,
-            "w": 12,
-            "x": 0,
-            "y": 24
+            "h": 4,
+            "w": 6,
+            "x": 12,
+            "y": 4
           },
           "fieldConfig": {
             "defaults": {
               "unit": "none",
-              "custom": {
-                "drawStyle": "line",
-                "lineWidth": 2,
-                "fillOpacity": 10,
-                "showPoints": "never",
-                "spanNulls": true
-              }
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "red",
+                    "value": 1
+                  }
+                ]
+              },
+              "decimals": 0
             },
             "overrides": [
             ]
           },
           "options": {
-            "legend": {
-              "displayMode": "list",
-              "placement": "bottom",
-              "showLegend": false
-            },
-            "tooltip": {
-              "mode": "single",
-              "sort": "none"
+            "colorMode": "value",
+            "graphMode": "none",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "textMode": "auto",
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
             }
           },
           "targets": [
@@ -2385,13 +2446,241 @@ data:
                 "type": "influxdb",
                 "uid": "influxdb"
               },
-              "query": "import \"strings\"\nimport \"regexp\"\n\n// The Publisher publishes its own diagnostics as OPC UA nodes under\n// nsu=http://opcfoundation.org/UA/CloudPublisher/ (see Diagnostics.cs), so the\n// writer lookup keys on that namespace instead of a production line station.\npublisherRx = regexp.compile(v: \"CloudPublisher\")\n\nwriters =\n  from(bucket: \"mqtt\")\n  |\u003e range(start: -2d)\n  |\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_metadata\")\n  |\u003e filter(fn: (r) =\u003e r.metaName =~ publisherRx)\n  |\u003e keep(columns: [\"datasetWriterId\"])\n  |\u003e group()\n  |\u003e distinct(column: \"datasetWriterId\")\n  |\u003e findColumn(fn: (key) =\u003e true, column: \"_value\")\n\nwritersRx = regexp.compile(v: \"^(\" + strings.joinStr(arr: writers, v: \"|\") + \")$\")\n\nfrom(bucket: \"mqtt\")\n  |\u003e range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_pubsub\" and r._field == \"Payload_SentMessages_Value\")\n  |\u003e filter(fn: (r) =\u003e r.datasetWriterId =~ writersRx)\n  |\u003e aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |\u003e group()\n  |\u003e aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |\u003e map(fn: (r) =\u003e ({_time: r._time, _value: float(v: r._value)}))\n  |\u003e keep(columns: [\"_time\", \"_value\"])\n  |\u003e yield(name: \"sentmessages\")",
+              "query": "import \"strings\"\nimport \"regexp\"\n\n// The Publisher publishes its own diagnostics as OPC UA nodes under\n// nsu=http://opcfoundation.org/UA/CloudPublisher/ (Diagnostics.cs), so the\n// writer lookup keys on that namespace rather than a production line station.\npublisherRx = regexp.compile(v: \"CloudPublisher\")\n\nwriters =\n  from(bucket: \"mqtt\")\n  |\u003e range(start: -2d)\n  |\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_metadata\")\n  |\u003e filter(fn: (r) =\u003e r.metaName =~ publisherRx)\n  |\u003e keep(columns: [\"datasetWriterId\"])\n  |\u003e group()\n  |\u003e distinct(column: \"datasetWriterId\")\n  |\u003e findColumn(fn: (key) =\u003e true, column: \"_value\")\n\nwritersRx = regexp.compile(v: \"^(\" + strings.joinStr(arr: writers, v: \"|\") + \")$\")\n\nfrom(bucket: \"mqtt\")\n  |\u003e range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_pubsub\" and r._field == \"Payload_BrokerMessageSendFailures_Value\")\n  |\u003e filter(fn: (r) =\u003e r.datasetWriterId =~ writersRx)\n  |\u003e map(fn: (r) =\u003e ({r with _value: float(v: r._value)}))\n  |\u003e group()\n  |\u003e last()\n  |\u003e keep(columns: [\"_time\", \"_value\"])\n  |\u003e yield(name: \"brokermessagesendfailures\")",
               "refId": "A"
             }
           ]
         },
         {
           "id": 8,
+          "type": "stat",
+          "title": "Stored messages left to send",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "influxdb"
+          },
+          "gridPos": {
+            "h": 4,
+            "w": 6,
+            "x": 18,
+            "y": 4
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "none",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "red",
+                    "value": 1
+                  }
+                ]
+              },
+              "decimals": 0
+            },
+            "overrides": [
+            ]
+          },
+          "options": {
+            "colorMode": "value",
+            "graphMode": "none",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "textMode": "auto",
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            }
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "influxdb",
+                "uid": "influxdb"
+              },
+              "query": "import \"strings\"\nimport \"regexp\"\n\n// The Publisher publishes its own diagnostics as OPC UA nodes under\n// nsu=http://opcfoundation.org/UA/CloudPublisher/ (Diagnostics.cs), so the\n// writer lookup keys on that namespace rather than a production line station.\npublisherRx = regexp.compile(v: \"CloudPublisher\")\n\nwriters =\n  from(bucket: \"mqtt\")\n  |\u003e range(start: -2d)\n  |\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_metadata\")\n  |\u003e filter(fn: (r) =\u003e r.metaName =~ publisherRx)\n  |\u003e keep(columns: [\"datasetWriterId\"])\n  |\u003e group()\n  |\u003e distinct(column: \"datasetWriterId\")\n  |\u003e findColumn(fn: (key) =\u003e true, column: \"_value\")\n\nwritersRx = regexp.compile(v: \"^(\" + strings.joinStr(arr: writers, v: \"|\") + \")$\")\n\nfrom(bucket: \"mqtt\")\n  |\u003e range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_pubsub\" and r._field == \"Payload_StoredMessagesLeftToSend_Value\")\n  |\u003e filter(fn: (r) =\u003e r.datasetWriterId =~ writersRx)\n  |\u003e map(fn: (r) =\u003e ({r with _value: float(v: r._value)}))\n  |\u003e group()\n  |\u003e last()\n  |\u003e keep(columns: [\"_time\", \"_value\"])\n  |\u003e yield(name: \"storedmessageslefttosend\")",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "id": 9,
+          "type": "stat",
+          "title": "Messages sent",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "influxdb"
+          },
+          "gridPos": {
+            "h": 4,
+            "w": 6,
+            "x": 0,
+            "y": 8
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "none",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "text",
+                    "value": null
+                  }
+                ]
+              },
+              "decimals": 0
+            },
+            "overrides": [
+            ]
+          },
+          "options": {
+            "colorMode": "value",
+            "graphMode": "none",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "textMode": "auto",
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            }
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "influxdb",
+                "uid": "influxdb"
+              },
+              "query": "import \"strings\"\nimport \"regexp\"\n\n// The Publisher publishes its own diagnostics as OPC UA nodes under\n// nsu=http://opcfoundation.org/UA/CloudPublisher/ (Diagnostics.cs), so the\n// writer lookup keys on that namespace rather than a production line station.\npublisherRx = regexp.compile(v: \"CloudPublisher\")\n\nwriters =\n  from(bucket: \"mqtt\")\n  |\u003e range(start: -2d)\n  |\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_metadata\")\n  |\u003e filter(fn: (r) =\u003e r.metaName =~ publisherRx)\n  |\u003e keep(columns: [\"datasetWriterId\"])\n  |\u003e group()\n  |\u003e distinct(column: \"datasetWriterId\")\n  |\u003e findColumn(fn: (key) =\u003e true, column: \"_value\")\n\nwritersRx = regexp.compile(v: \"^(\" + strings.joinStr(arr: writers, v: \"|\") + \")$\")\n\nfrom(bucket: \"mqtt\")\n  |\u003e range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_pubsub\" and r._field == \"Payload_SentMessages_Value\")\n  |\u003e filter(fn: (r) =\u003e r.datasetWriterId =~ writersRx)\n  |\u003e map(fn: (r) =\u003e ({r with _value: float(v: r._value)}))\n  |\u003e group()\n  |\u003e last()\n  |\u003e keep(columns: [\"_time\", \"_value\"])\n  |\u003e yield(name: \"sentmessages\")",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "id": 10,
+          "type": "stat",
+          "title": "Avg broker message size",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "influxdb"
+          },
+          "gridPos": {
+            "h": 4,
+            "w": 6,
+            "x": 6,
+            "y": 8
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "decbytes",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "text",
+                    "value": null
+                  }
+                ]
+              },
+              "decimals": 0
+            },
+            "overrides": [
+            ]
+          },
+          "options": {
+            "colorMode": "value",
+            "graphMode": "none",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "textMode": "auto",
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            }
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "influxdb",
+                "uid": "influxdb"
+              },
+              "query": "import \"strings\"\nimport \"regexp\"\n\n// The Publisher publishes its own diagnostics as OPC UA nodes under\n// nsu=http://opcfoundation.org/UA/CloudPublisher/ (Diagnostics.cs), so the\n// writer lookup keys on that namespace rather than a production line station.\npublisherRx = regexp.compile(v: \"CloudPublisher\")\n\nwriters =\n  from(bucket: \"mqtt\")\n  |\u003e range(start: -2d)\n  |\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_metadata\")\n  |\u003e filter(fn: (r) =\u003e r.metaName =~ publisherRx)\n  |\u003e keep(columns: [\"datasetWriterId\"])\n  |\u003e group()\n  |\u003e distinct(column: \"datasetWriterId\")\n  |\u003e findColumn(fn: (key) =\u003e true, column: \"_value\")\n\nwritersRx = regexp.compile(v: \"^(\" + strings.joinStr(arr: writers, v: \"|\") + \")$\")\n\nfrom(bucket: \"mqtt\")\n  |\u003e range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_pubsub\" and r._field == \"Payload_BrokerMessageSize_Value\")\n  |\u003e filter(fn: (r) =\u003e r.datasetWriterId =~ writersRx)\n  |\u003e map(fn: (r) =\u003e ({r with _value: float(v: r._value)}))\n  |\u003e group()\n  |\u003e last()\n  |\u003e keep(columns: [\"_time\", \"_value\"])\n  |\u003e yield(name: \"brokermessagesize\")",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "id": 11,
+          "type": "stat",
+          "title": "Working set",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "influxdb"
+          },
+          "gridPos": {
+            "h": 4,
+            "w": 6,
+            "x": 12,
+            "y": 8
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "decmbytes",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "text",
+                    "value": null
+                  }
+                ]
+              },
+              "decimals": 0
+            },
+            "overrides": [
+            ]
+          },
+          "options": {
+            "colorMode": "value",
+            "graphMode": "none",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "textMode": "auto",
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            }
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "influxdb",
+                "uid": "influxdb"
+              },
+              "query": "import \"strings\"\nimport \"regexp\"\n\n// The Publisher publishes its own diagnostics as OPC UA nodes under\n// nsu=http://opcfoundation.org/UA/CloudPublisher/ (Diagnostics.cs), so the\n// writer lookup keys on that namespace rather than a production line station.\npublisherRx = regexp.compile(v: \"CloudPublisher\")\n\nwriters =\n  from(bucket: \"mqtt\")\n  |\u003e range(start: -2d)\n  |\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_metadata\")\n  |\u003e filter(fn: (r) =\u003e r.metaName =~ publisherRx)\n  |\u003e keep(columns: [\"datasetWriterId\"])\n  |\u003e group()\n  |\u003e distinct(column: \"datasetWriterId\")\n  |\u003e findColumn(fn: (key) =\u003e true, column: \"_value\")\n\nwritersRx = regexp.compile(v: \"^(\" + strings.joinStr(arr: writers, v: \"|\") + \")$\")\n\nfrom(bucket: \"mqtt\")\n  |\u003e range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_pubsub\" and r._field == \"Payload_CurrentWorkingSetMBs_Value\")\n  |\u003e filter(fn: (r) =\u003e r.datasetWriterId =~ writersRx)\n  |\u003e map(fn: (r) =\u003e ({r with _value: float(v: r._value)}))\n  |\u003e group()\n  |\u003e last()\n  |\u003e keep(columns: [\"_time\", \"_value\"])\n  |\u003e yield(name: \"currentworkingsetmbs\")",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "id": 12,
           "type": "timeseries",
           "title": "Broker messages / second",
           "datasource": {
@@ -2399,10 +2688,10 @@ data:
             "uid": "influxdb"
           },
           "gridPos": {
-            "h": 8,
-            "w": 12,
-            "x": 12,
-            "y": 24
+            "h": 7,
+            "w": 8,
+            "x": 0,
+            "y": 15
           },
           "fieldConfig": {
             "defaults": {
@@ -2413,6 +2702,15 @@ data:
                 "fillOpacity": 10,
                 "showPoints": "never",
                 "spanNulls": true
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "text",
+                    "value": null
+                  }
+                ]
               }
             },
             "overrides": [
@@ -2435,34 +2733,43 @@ data:
                 "type": "influxdb",
                 "uid": "influxdb"
               },
-              "query": "import \"strings\"\nimport \"regexp\"\n\n// The Publisher publishes its own diagnostics as OPC UA nodes under\n// nsu=http://opcfoundation.org/UA/CloudPublisher/ (see Diagnostics.cs), so the\n// writer lookup keys on that namespace instead of a production line station.\npublisherRx = regexp.compile(v: \"CloudPublisher\")\n\nwriters =\n  from(bucket: \"mqtt\")\n  |\u003e range(start: -2d)\n  |\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_metadata\")\n  |\u003e filter(fn: (r) =\u003e r.metaName =~ publisherRx)\n  |\u003e keep(columns: [\"datasetWriterId\"])\n  |\u003e group()\n  |\u003e distinct(column: \"datasetWriterId\")\n  |\u003e findColumn(fn: (key) =\u003e true, column: \"_value\")\n\nwritersRx = regexp.compile(v: \"^(\" + strings.joinStr(arr: writers, v: \"|\") + \")$\")\n\nfrom(bucket: \"mqtt\")\n  |\u003e range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_pubsub\" and r._field == \"Payload_BrokerMessagesSecond_Value\")\n  |\u003e filter(fn: (r) =\u003e r.datasetWriterId =~ writersRx)\n  |\u003e aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |\u003e group()\n  |\u003e aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |\u003e map(fn: (r) =\u003e ({_time: r._time, _value: float(v: r._value)}))\n  |\u003e keep(columns: [\"_time\", \"_value\"])\n  |\u003e yield(name: \"brokermessagessecond\")",
+              "query": "import \"strings\"\nimport \"regexp\"\n\n// The Publisher publishes its own diagnostics as OPC UA nodes under\n// nsu=http://opcfoundation.org/UA/CloudPublisher/ (Diagnostics.cs), so the\n// writer lookup keys on that namespace rather than a production line station.\npublisherRx = regexp.compile(v: \"CloudPublisher\")\n\nwriters =\n  from(bucket: \"mqtt\")\n  |\u003e range(start: -2d)\n  |\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_metadata\")\n  |\u003e filter(fn: (r) =\u003e r.metaName =~ publisherRx)\n  |\u003e keep(columns: [\"datasetWriterId\"])\n  |\u003e group()\n  |\u003e distinct(column: \"datasetWriterId\")\n  |\u003e findColumn(fn: (key) =\u003e true, column: \"_value\")\n\nwritersRx = regexp.compile(v: \"^(\" + strings.joinStr(arr: writers, v: \"|\") + \")$\")\n\nfrom(bucket: \"mqtt\")\n  |\u003e range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_pubsub\" and r._field == \"Payload_BrokerMessagesSecond_Value\")\n  |\u003e filter(fn: (r) =\u003e r.datasetWriterId =~ writersRx)\n  |\u003e map(fn: (r) =\u003e ({r with _value: float(v: r._value)}))\n  |\u003e group()\n  |\u003e aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |\u003e keep(columns: [\"_time\", \"_value\"])\n  |\u003e yield(name: \"brokermessagessecond\")",
               "refId": "A"
             }
           ]
         },
         {
-          "id": 9,
+          "id": 13,
           "type": "timeseries",
-          "title": "Average broker message size",
+          "title": "Notifications / second",
           "datasource": {
             "type": "influxdb",
             "uid": "influxdb"
           },
           "gridPos": {
-            "h": 8,
-            "w": 12,
-            "x": 0,
-            "y": 32
+            "h": 7,
+            "w": 8,
+            "x": 8,
+            "y": 15
           },
           "fieldConfig": {
             "defaults": {
-              "unit": "decbytes",
+              "unit": "none",
               "custom": {
                 "drawStyle": "line",
                 "lineWidth": 2,
                 "fillOpacity": 10,
                 "showPoints": "never",
                 "spanNulls": true
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "text",
+                    "value": null
+                  }
+                ]
               }
             },
             "overrides": [
@@ -2485,13 +2792,13 @@ data:
                 "type": "influxdb",
                 "uid": "influxdb"
               },
-              "query": "import \"strings\"\nimport \"regexp\"\n\n// The Publisher publishes its own diagnostics as OPC UA nodes under\n// nsu=http://opcfoundation.org/UA/CloudPublisher/ (see Diagnostics.cs), so the\n// writer lookup keys on that namespace instead of a production line station.\npublisherRx = regexp.compile(v: \"CloudPublisher\")\n\nwriters =\n  from(bucket: \"mqtt\")\n  |\u003e range(start: -2d)\n  |\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_metadata\")\n  |\u003e filter(fn: (r) =\u003e r.metaName =~ publisherRx)\n  |\u003e keep(columns: [\"datasetWriterId\"])\n  |\u003e group()\n  |\u003e distinct(column: \"datasetWriterId\")\n  |\u003e findColumn(fn: (key) =\u003e true, column: \"_value\")\n\nwritersRx = regexp.compile(v: \"^(\" + strings.joinStr(arr: writers, v: \"|\") + \")$\")\n\nfrom(bucket: \"mqtt\")\n  |\u003e range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_pubsub\" and r._field == \"Payload_BrokerMessageSize_Value\")\n  |\u003e filter(fn: (r) =\u003e r.datasetWriterId =~ writersRx)\n  |\u003e aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |\u003e group()\n  |\u003e aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |\u003e map(fn: (r) =\u003e ({_time: r._time, _value: float(v: r._value)}))\n  |\u003e keep(columns: [\"_time\", \"_value\"])\n  |\u003e yield(name: \"brokermessagesize\")",
+              "query": "import \"strings\"\nimport \"regexp\"\n\n// The Publisher publishes its own diagnostics as OPC UA nodes under\n// nsu=http://opcfoundation.org/UA/CloudPublisher/ (Diagnostics.cs), so the\n// writer lookup keys on that namespace rather than a production line station.\npublisherRx = regexp.compile(v: \"CloudPublisher\")\n\nwriters =\n  from(bucket: \"mqtt\")\n  |\u003e range(start: -2d)\n  |\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_metadata\")\n  |\u003e filter(fn: (r) =\u003e r.metaName =~ publisherRx)\n  |\u003e keep(columns: [\"datasetWriterId\"])\n  |\u003e group()\n  |\u003e distinct(column: \"datasetWriterId\")\n  |\u003e findColumn(fn: (key) =\u003e true, column: \"_value\")\n\nwritersRx = regexp.compile(v: \"^(\" + strings.joinStr(arr: writers, v: \"|\") + \")$\")\n\nfrom(bucket: \"mqtt\")\n  |\u003e range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_pubsub\" and r._field == \"Payload_NumOpcMonitoredItemsSecond_Value\")\n  |\u003e filter(fn: (r) =\u003e r.datasetWriterId =~ writersRx)\n  |\u003e map(fn: (r) =\u003e ({r with _value: float(v: r._value)}))\n  |\u003e group()\n  |\u003e aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |\u003e keep(columns: [\"_time\", \"_value\"])\n  |\u003e yield(name: \"numopcmonitoreditemssecond\")",
               "refId": "A"
             }
           ]
         },
         {
-          "id": 10,
+          "id": 14,
           "type": "timeseries",
           "title": "Average message latency",
           "datasource": {
@@ -2499,10 +2806,10 @@ data:
             "uid": "influxdb"
           },
           "gridPos": {
-            "h": 8,
-            "w": 12,
-            "x": 12,
-            "y": 32
+            "h": 7,
+            "w": 8,
+            "x": 16,
+            "y": 15
           },
           "fieldConfig": {
             "defaults": {
@@ -2513,6 +2820,15 @@ data:
                 "fillOpacity": 10,
                 "showPoints": "never",
                 "spanNulls": true
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "text",
+                    "value": null
+                  }
+                ]
               }
             },
             "overrides": [
@@ -2535,207 +2851,7 @@ data:
                 "type": "influxdb",
                 "uid": "influxdb"
               },
-              "query": "import \"strings\"\nimport \"regexp\"\n\n// The Publisher publishes its own diagnostics as OPC UA nodes under\n// nsu=http://opcfoundation.org/UA/CloudPublisher/ (see Diagnostics.cs), so the\n// writer lookup keys on that namespace instead of a production line station.\npublisherRx = regexp.compile(v: \"CloudPublisher\")\n\nwriters =\n  from(bucket: \"mqtt\")\n  |\u003e range(start: -2d)\n  |\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_metadata\")\n  |\u003e filter(fn: (r) =\u003e r.metaName =~ publisherRx)\n  |\u003e keep(columns: [\"datasetWriterId\"])\n  |\u003e group()\n  |\u003e distinct(column: \"datasetWriterId\")\n  |\u003e findColumn(fn: (key) =\u003e true, column: \"_value\")\n\nwritersRx = regexp.compile(v: \"^(\" + strings.joinStr(arr: writers, v: \"|\") + \")$\")\n\nfrom(bucket: \"mqtt\")\n  |\u003e range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_pubsub\" and r._field == \"Payload_BrokerMessageLatency_Value\")\n  |\u003e filter(fn: (r) =\u003e r.datasetWriterId =~ writersRx)\n  |\u003e aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |\u003e group()\n  |\u003e aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |\u003e map(fn: (r) =\u003e ({_time: r._time, _value: float(v: r._value)}))\n  |\u003e keep(columns: [\"_time\", \"_value\"])\n  |\u003e yield(name: \"brokermessagelatency\")",
-              "refId": "A"
-            }
-          ]
-        },
-        {
-          "id": 11,
-          "type": "timeseries",
-          "title": "Send failures (cumulative)",
-          "datasource": {
-            "type": "influxdb",
-            "uid": "influxdb"
-          },
-          "gridPos": {
-            "h": 8,
-            "w": 12,
-            "x": 0,
-            "y": 40
-          },
-          "fieldConfig": {
-            "defaults": {
-              "unit": "none",
-              "custom": {
-                "drawStyle": "line",
-                "lineWidth": 2,
-                "fillOpacity": 10,
-                "showPoints": "never",
-                "spanNulls": true
-              }
-            },
-            "overrides": [
-            ]
-          },
-          "options": {
-            "legend": {
-              "displayMode": "list",
-              "placement": "bottom",
-              "showLegend": false
-            },
-            "tooltip": {
-              "mode": "single",
-              "sort": "none"
-            }
-          },
-          "targets": [
-            {
-              "datasource": {
-                "type": "influxdb",
-                "uid": "influxdb"
-              },
-              "query": "import \"strings\"\nimport \"regexp\"\n\n// The Publisher publishes its own diagnostics as OPC UA nodes under\n// nsu=http://opcfoundation.org/UA/CloudPublisher/ (see Diagnostics.cs), so the\n// writer lookup keys on that namespace instead of a production line station.\npublisherRx = regexp.compile(v: \"CloudPublisher\")\n\nwriters =\n  from(bucket: \"mqtt\")\n  |\u003e range(start: -2d)\n  |\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_metadata\")\n  |\u003e filter(fn: (r) =\u003e r.metaName =~ publisherRx)\n  |\u003e keep(columns: [\"datasetWriterId\"])\n  |\u003e group()\n  |\u003e distinct(column: \"datasetWriterId\")\n  |\u003e findColumn(fn: (key) =\u003e true, column: \"_value\")\n\nwritersRx = regexp.compile(v: \"^(\" + strings.joinStr(arr: writers, v: \"|\") + \")$\")\n\nfrom(bucket: \"mqtt\")\n  |\u003e range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_pubsub\" and r._field == \"Payload_BrokerMessageSendFailures_Value\")\n  |\u003e filter(fn: (r) =\u003e r.datasetWriterId =~ writersRx)\n  |\u003e aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |\u003e group()\n  |\u003e aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |\u003e map(fn: (r) =\u003e ({_time: r._time, _value: float(v: r._value)}))\n  |\u003e keep(columns: [\"_time\", \"_value\"])\n  |\u003e yield(name: \"brokermessagesendfailures\")",
-              "refId": "A"
-            }
-          ]
-        },
-        {
-          "id": 12,
-          "type": "timeseries",
-          "title": "Monitored item notifications / second",
-          "datasource": {
-            "type": "influxdb",
-            "uid": "influxdb"
-          },
-          "gridPos": {
-            "h": 8,
-            "w": 12,
-            "x": 12,
-            "y": 40
-          },
-          "fieldConfig": {
-            "defaults": {
-              "unit": "none",
-              "custom": {
-                "drawStyle": "line",
-                "lineWidth": 2,
-                "fillOpacity": 10,
-                "showPoints": "never",
-                "spanNulls": true
-              }
-            },
-            "overrides": [
-            ]
-          },
-          "options": {
-            "legend": {
-              "displayMode": "list",
-              "placement": "bottom",
-              "showLegend": false
-            },
-            "tooltip": {
-              "mode": "single",
-              "sort": "none"
-            }
-          },
-          "targets": [
-            {
-              "datasource": {
-                "type": "influxdb",
-                "uid": "influxdb"
-              },
-              "query": "import \"strings\"\nimport \"regexp\"\n\n// The Publisher publishes its own diagnostics as OPC UA nodes under\n// nsu=http://opcfoundation.org/UA/CloudPublisher/ (see Diagnostics.cs), so the\n// writer lookup keys on that namespace instead of a production line station.\npublisherRx = regexp.compile(v: \"CloudPublisher\")\n\nwriters =\n  from(bucket: \"mqtt\")\n  |\u003e range(start: -2d)\n  |\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_metadata\")\n  |\u003e filter(fn: (r) =\u003e r.metaName =~ publisherRx)\n  |\u003e keep(columns: [\"datasetWriterId\"])\n  |\u003e group()\n  |\u003e distinct(column: \"datasetWriterId\")\n  |\u003e findColumn(fn: (key) =\u003e true, column: \"_value\")\n\nwritersRx = regexp.compile(v: \"^(\" + strings.joinStr(arr: writers, v: \"|\") + \")$\")\n\nfrom(bucket: \"mqtt\")\n  |\u003e range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_pubsub\" and r._field == \"Payload_NumOpcMonitoredItemsSecond_Value\")\n  |\u003e filter(fn: (r) =\u003e r.datasetWriterId =~ writersRx)\n  |\u003e aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |\u003e group()\n  |\u003e aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |\u003e map(fn: (r) =\u003e ({_time: r._time, _value: float(v: r._value)}))\n  |\u003e keep(columns: [\"_time\", \"_value\"])\n  |\u003e yield(name: \"numopcmonitoreditemssecond\")",
-              "refId": "A"
-            }
-          ]
-        },
-        {
-          "id": 13,
-          "type": "timeseries",
-          "title": "Stored messages left to send",
-          "datasource": {
-            "type": "influxdb",
-            "uid": "influxdb"
-          },
-          "gridPos": {
-            "h": 8,
-            "w": 12,
-            "x": 0,
-            "y": 48
-          },
-          "fieldConfig": {
-            "defaults": {
-              "unit": "none",
-              "custom": {
-                "drawStyle": "line",
-                "lineWidth": 2,
-                "fillOpacity": 10,
-                "showPoints": "never",
-                "spanNulls": true
-              }
-            },
-            "overrides": [
-            ]
-          },
-          "options": {
-            "legend": {
-              "displayMode": "list",
-              "placement": "bottom",
-              "showLegend": false
-            },
-            "tooltip": {
-              "mode": "single",
-              "sort": "none"
-            }
-          },
-          "targets": [
-            {
-              "datasource": {
-                "type": "influxdb",
-                "uid": "influxdb"
-              },
-              "query": "import \"strings\"\nimport \"regexp\"\n\n// The Publisher publishes its own diagnostics as OPC UA nodes under\n// nsu=http://opcfoundation.org/UA/CloudPublisher/ (see Diagnostics.cs), so the\n// writer lookup keys on that namespace instead of a production line station.\npublisherRx = regexp.compile(v: \"CloudPublisher\")\n\nwriters =\n  from(bucket: \"mqtt\")\n  |\u003e range(start: -2d)\n  |\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_metadata\")\n  |\u003e filter(fn: (r) =\u003e r.metaName =~ publisherRx)\n  |\u003e keep(columns: [\"datasetWriterId\"])\n  |\u003e group()\n  |\u003e distinct(column: \"datasetWriterId\")\n  |\u003e findColumn(fn: (key) =\u003e true, column: \"_value\")\n\nwritersRx = regexp.compile(v: \"^(\" + strings.joinStr(arr: writers, v: \"|\") + \")$\")\n\nfrom(bucket: \"mqtt\")\n  |\u003e range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_pubsub\" and r._field == \"Payload_StoredMessagesLeftToSend_Value\")\n  |\u003e filter(fn: (r) =\u003e r.datasetWriterId =~ writersRx)\n  |\u003e aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |\u003e group()\n  |\u003e aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |\u003e map(fn: (r) =\u003e ({_time: r._time, _value: float(v: r._value)}))\n  |\u003e keep(columns: [\"_time\", \"_value\"])\n  |\u003e yield(name: \"storedmessageslefttosend\")",
-              "refId": "A"
-            }
-          ]
-        },
-        {
-          "id": 14,
-          "type": "timeseries",
-          "title": "Working set",
-          "datasource": {
-            "type": "influxdb",
-            "uid": "influxdb"
-          },
-          "gridPos": {
-            "h": 8,
-            "w": 12,
-            "x": 12,
-            "y": 48
-          },
-          "fieldConfig": {
-            "defaults": {
-              "unit": "decmbytes",
-              "custom": {
-                "drawStyle": "line",
-                "lineWidth": 2,
-                "fillOpacity": 10,
-                "showPoints": "never",
-                "spanNulls": true
-              }
-            },
-            "overrides": [
-            ]
-          },
-          "options": {
-            "legend": {
-              "displayMode": "list",
-              "placement": "bottom",
-              "showLegend": false
-            },
-            "tooltip": {
-              "mode": "single",
-              "sort": "none"
-            }
-          },
-          "targets": [
-            {
-              "datasource": {
-                "type": "influxdb",
-                "uid": "influxdb"
-              },
-              "query": "import \"strings\"\nimport \"regexp\"\n\n// The Publisher publishes its own diagnostics as OPC UA nodes under\n// nsu=http://opcfoundation.org/UA/CloudPublisher/ (see Diagnostics.cs), so the\n// writer lookup keys on that namespace instead of a production line station.\npublisherRx = regexp.compile(v: \"CloudPublisher\")\n\nwriters =\n  from(bucket: \"mqtt\")\n  |\u003e range(start: -2d)\n  |\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_metadata\")\n  |\u003e filter(fn: (r) =\u003e r.metaName =~ publisherRx)\n  |\u003e keep(columns: [\"datasetWriterId\"])\n  |\u003e group()\n  |\u003e distinct(column: \"datasetWriterId\")\n  |\u003e findColumn(fn: (key) =\u003e true, column: \"_value\")\n\nwritersRx = regexp.compile(v: \"^(\" + strings.joinStr(arr: writers, v: \"|\") + \")$\")\n\nfrom(bucket: \"mqtt\")\n  |\u003e range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_pubsub\" and r._field == \"Payload_CurrentWorkingSetMBs_Value\")\n  |\u003e filter(fn: (r) =\u003e r.datasetWriterId =~ writersRx)\n  |\u003e aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |\u003e group()\n  |\u003e aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |\u003e map(fn: (r) =\u003e ({_time: r._time, _value: float(v: r._value)}))\n  |\u003e keep(columns: [\"_time\", \"_value\"])\n  |\u003e yield(name: \"currentworkingsetmbs\")",
+              "query": "import \"strings\"\nimport \"regexp\"\n\n// The Publisher publishes its own diagnostics as OPC UA nodes under\n// nsu=http://opcfoundation.org/UA/CloudPublisher/ (Diagnostics.cs), so the\n// writer lookup keys on that namespace rather than a production line station.\npublisherRx = regexp.compile(v: \"CloudPublisher\")\n\nwriters =\n  from(bucket: \"mqtt\")\n  |\u003e range(start: -2d)\n  |\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_metadata\")\n  |\u003e filter(fn: (r) =\u003e r.metaName =~ publisherRx)\n  |\u003e keep(columns: [\"datasetWriterId\"])\n  |\u003e group()\n  |\u003e distinct(column: \"datasetWriterId\")\n  |\u003e findColumn(fn: (key) =\u003e true, column: \"_value\")\n\nwritersRx = regexp.compile(v: \"^(\" + strings.joinStr(arr: writers, v: \"|\") + \")$\")\n\nfrom(bucket: \"mqtt\")\n  |\u003e range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |\u003e filter(fn: (r) =\u003e r._measurement == \"opcua_pubsub\" and r._field == \"Payload_BrokerMessageLatency_Value\")\n  |\u003e filter(fn: (r) =\u003e r.datasetWriterId =~ writersRx)\n  |\u003e map(fn: (r) =\u003e ({r with _value: float(v: r._value)}))\n  |\u003e group()\n  |\u003e aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |\u003e keep(columns: [\"_time\", \"_value\"])\n  |\u003e yield(name: \"brokermessagelatency\")",
               "refId": "A"
             }
           ]
@@ -2761,7 +2877,7 @@ data:
       "timezone": "",
       "title": "UA Cloud Publisher Diagnostics",
       "uid": "publisher-diagnostics",
-      "version": 1,
+      "version": 2,
       "weekStart": ""
     }
 ---
