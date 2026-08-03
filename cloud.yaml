@@ -390,16 +390,24 @@ spec:
               mountPath: /mosquitto/data
             - name: mosquitto-certs
               mountPath: /mosquitto/certs
+          # NOTE: deliberately NOT a tcpSocket probe on 8883. kubelet would open a
+          # raw TCP connection and close it immediately without completing the TLS
+          # handshake, which Mosquitto logs as
+          #   OpenSSL Error ... unexpected eof while reading
+          #   Client <ip> disconnected: Protocol error.
+          # With liveness + readiness both probing, that is one such pair every ~5s,
+          # which floods the log and hides real client problems. Checking that the
+          # broker process is alive gives the same signal without opening a socket.
           livenessProbe:
-            tcpSocket:
-              port: mqtts
+            exec:
+              command: ["/bin/sh", "-c", "pgrep mosquitto > /dev/null"]
             initialDelaySeconds: 5
-            periodSeconds: 10
+            periodSeconds: 30
           readinessProbe:
-            tcpSocket:
-              port: mqtts
+            exec:
+              command: ["/bin/sh", "-c", "pgrep mosquitto > /dev/null"]
             initialDelaySeconds: 5
-            periodSeconds: 10
+            periodSeconds: 30
       volumes:
         - name: mosquitto-conf
           configMap:
