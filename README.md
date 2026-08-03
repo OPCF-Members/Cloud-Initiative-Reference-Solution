@@ -656,7 +656,7 @@ Replace `<device-ip>` with the CM5's IP address (from `ip addr` or
 | **Portainer** | `https://<device-ip>:9443` | Kubernetes management UI for the K3s cluster. On first access you set the admin password (see *Managing the Cluster with Portainer*). |
 | **Grafana** | `http://<device-ip>:3000` | Dashboards & alerting. Log in with the `IOT_USERNAME` / `IOT_PASSWORD` you set. The InfluxDB data source and two dashboards (*Production Line OEE*, *Modbus Simulator*) are pre-provisioned (see *Pre-Provisioned Grafana Dashboards*). |
 | **UA Cloud Action** | `http://<device-ip>:8082` | Status UI for the automated feedback loop (data-source, broker, and Commander connectivity) and OPC UA Web API. Log in with the `IOT_USERNAME` / `IOT_PASSWORD` you set (see *Automated Feedback Loop with UA Cloud Action*). |
-| **MQTT Explorer** | `http://<device-ip>:4000` | **Web UI for the Mosquitto broker** — browse the live topic tree, inspect the OPC UA PubSub payloads on `data/#` and `metadata`, and publish messages by hand (handy for driving UA Cloud Commander on `commands`). The broker connection is entered in the UI — see *Inspecting the Broker with MQTT Explorer*. ⚠️ **No built-in authentication.** |
+| **MQTT Explorer** | `http://<device-ip>:4000` | **Web UI for the Mosquitto broker** — browse the live topic tree, inspect the OPC UA PubSub payloads on `data/#` and `metadata`, and publish messages by hand (handy for driving UA Cloud Commander on `commands`). The broker connection is pre-provisioned — just press **Connect**; see *Inspecting the Broker with MQTT Explorer*. ⚠️ **No built-in authentication.** |
 
 To keep both UIs reachable on the single node,
  **8081** (mapped to the container's 8080) while the Edge Translator stays on **8080**. No extra steps are needed — just browse to `:8080` and `:8081` respectively.
@@ -779,7 +779,12 @@ is on the wire between UA Cloud Publisher, Telegraf and UA Cloud Commander.
 
 ### Connecting
 
-On first load, create a connection with these settings:
+**No setup is required.** The Mosquitto connection is pre-provisioned from the
+`mqtt-explorer-config` ConfigMap in [`cloud.yaml`](./cloud.yaml) and is already
+filled in when the UI first loads — pick **Mosquitto (this cluster)** and press
+**Connect**.
+
+The seeded connection uses:
 
 | Field | Value |
 |-------|-------|
@@ -788,9 +793,16 @@ On first load, create a connection with these settings:
 | **Port** | `8883` |
 | **Username** / **Password** | your `IOT_USERNAME` / `IOT_PASSWORD` |
 | **Validate certificate** | **off** |
+| **Subscription** | `#` (the whole topic tree) |
 
 Certificate validation must be **off**: Mosquitto uses a self-signed certificate
-generated on first start, which no public CA has signed.
+generated on first start, which no public CA has signed. This is the same reason
+Telegraf sets `insecure_skip_verify` and UA Cloud Action sets
+`MQTT_TLS_INSECURE`.
+
+> **Note:** connections you edit in the UI are stored in an `emptyDir`, so the
+> pod returns to the provisioned connection after a restart. To change the
+> default permanently, edit the `mqtt-explorer-config` ConfigMap instead.
 
 Once connected you will see the live topic tree:
 
@@ -818,8 +830,46 @@ Grafana without any manual import.
 
 | Dashboard | UID | What it shows |
 |---|---|---|
-| **Production Line OEE** | `production-line-oee` | Availability / Performance / Quality gauges, OEE, status and product counts for the simulated production line. Has a **Station** dropdown (`assembly`, `test`, `packaging`). This is also the Grafana home dashboard. |
+| **Production Line OEE** | `production-line-oee` | Line and per-station OEE, station status, cycle time and product counts for the simulated production line. Has a **Station** dropdown (`assembly`, `test`, `packaging`). This is also the Grafana home dashboard. |
 | **Modbus Simulator** | `modbus-simulator` | All 8 tags of the simulated Modbus TCP device, onboarded through UA Edge Translator (see *Simulated Modbus TCP Device*). |
+
+### Reading the Production Line OEE Dashboard
+
+Every panel except the line gauge follows the **Station** dropdown, so the
+dashboard shows one station at a time:
+
+| Panel | Scope |
+|---|---|
+| **OEE - production line (bottleneck)** | the whole line, ignores the dropdown |
+| **OEE - \<station\>** | selected station |
+| **Status - \<station\>** | selected station |
+| **Actual cycle time - \<station\>** | selected station |
+| Manufactured / Discarded products, Energy consumption, Pressure | selected station |
+
+**Line OEE is the OEE of the slowest station, not an average.** On a serial line
+(`assembly` → `test` → `packaging`) the stations are coupled: the slowest one
+starves everything downstream and blocks everything upstream, so line throughput
+is governed by the constraint. Averaging would hide the very station you need to
+act on. This matches `CalculateOEEForLine()` in the
+[Manufacturing Ontologies](https://github.com/digitaltwinconsortium/ManufacturingOntologies)
+reference, which evaluates each station and then takes `summarize min(oee)`.
+
+The **Status** panels are stepped line charts rather than smooth ones, because
+`Status` is a discrete enum — interpolating between points would draw the station
+passing through states it never occupied:
+
+| Value | State |
+|---|---|
+| 0 | Ready |
+| 1 | WorkInProgress |
+| 2 | Done |
+| 3 | Discarded |
+| 4 | Fault |
+
+> **Note:** the OEE figures here are calculated over the dashboard's time range,
+> whereas the Manufacturing Ontologies reference calculates them over a fixed
+> shift window. The two therefore will not produce the same number for the same
+> line.
 
 ## Tutorials
 
