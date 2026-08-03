@@ -816,6 +816,18 @@ spec:
         args:
         # Use the in-cluster (Kubernetes) environment as the default endpoint
         - "--tunnel-port=8000"
+        # Newer Portainer releases (this appeared after 2.21) refuse to show the
+        # "create admin user" page until you paste a setup token that is printed
+        # to the container log, as protection against someone else claiming a
+        # publicly reachable instance first. That is a poor fit here: the UI is
+        # deployed unattended as part of the stack, so the first thing a user
+        # would have to do is go and read the pod log.
+        #
+        # SECURITY: this restores the older behaviour where whoever reaches the
+        # UI first creates the admin account. Browse to it and set the password
+        # promptly after deploying - see "Managing the Cluster with Portainer"
+        # in the README.
+        - "--no-setup-token"
         ports:
         - name: http
           containerPort: 9000
