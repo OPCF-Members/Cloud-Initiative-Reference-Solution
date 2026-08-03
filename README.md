@@ -218,7 +218,7 @@ end-to-end pipeline from industrial protocols to a time-series database.
   Initialized with org `iot`, bucket `mqtt`, and an admin user set to your
   `IOT_USERNAME`. Includes a web UI (Data Explorer / dashboards).
 - **grafana** — *Grafana* dashboarding & alerting UI with a **pre-provisioned
-  InfluxDB data source** (Flux, org `iot`, bucket `mqtt`) and two **pre-provisioned
+  InfluxDB data source** (Flux, org `iot`, bucket `mqtt`) and three **pre-provisioned
   dashboards** ("Production Line OEE" and "Modbus Simulator") — see
   *Pre-Provisioned Grafana Dashboards*.
 - **ua-cloudaction** — OPC Foundation *UA Cloud Action*, the command & control
@@ -239,7 +239,7 @@ end-to-end pipeline from industrial protocols to a time-series database.
 | `ua-cloudpublisher-settings` | ConfigMap | Seeds the Publisher's `settings.json` (broker connection, topics, metadata) and `persistency.json` (published nodes for the simulated line) on first start. |
 | `modbus-simulator` | ConfigMap | The Python Modbus TCP simulation server run by the simulated device. |
 | `modbus-thing-description` | ConfigMap | W3C WoT Thing Description seeded into UA Edge Translator so the Modbus device is onboarded as an OPC UA asset at startup. |
-| `grafana-datasources`, `grafana-dashboard-provider`, `grafana-dashboards` | ConfigMaps | Provision the InfluxDB data source and the two dashboards (*Production Line OEE*, *Modbus Simulator*). |
+| `grafana-datasources`, `grafana-dashboard-provider`, `grafana-dashboards` | ConfigMaps | Provision the InfluxDB data source and the three dashboards (*Production Line OEE*, *Modbus Simulator*, *UA Cloud Publisher Diagnostics*). |
 | `opcua-model-importer` | ConfigMap | Importer script for [loading OPC UA Information Models](./tutorial-import-information-model.md) from the UA Cloud Library. |
 | `portainer-sa-clusteradmin` / `portainer-crb-clusteradmin` | ServiceAccount / ClusterRoleBinding | Grant Portainer in-cluster access to the K3s API server. |
 
@@ -654,7 +654,7 @@ Replace `<device-ip>` with the CM5's IP address (from `ip addr` or
 | **UA Cloud Publisher** | `http://<device-ip>:8081` | Configure which OPC UA nodes to publish and the MQTT broker target (`mosquitto.cloud.svc.cluster.local:8883`, TLS). Log in with the `IOT_USERNAME` / `IOT_PASSWORD` you set (exposed via the manifest `PUBLISHER_USERNAME` / `PUBLISHER_PASSWORD` env vars). |
 | **InfluxDB** | `http://<device-ip>:8086` | Time-series UI, Data Explorer, and dashboards. Log in with the `IOT_USERNAME` / `IOT_PASSWORD` you set (org `iot`, bucket `mqtt`). |
 | **Portainer** | `https://<device-ip>:9443` | Kubernetes management UI for the K3s cluster. On first access you set the admin password (see *Managing the Cluster with Portainer*). |
-| **Grafana** | `http://<device-ip>:3000` | Dashboards & alerting. Log in with the `IOT_USERNAME` / `IOT_PASSWORD` you set. The InfluxDB data source and two dashboards (*Production Line OEE*, *Modbus Simulator*) are pre-provisioned (see *Pre-Provisioned Grafana Dashboards*). |
+| **Grafana** | `http://<device-ip>:3000` | Dashboards & alerting. Log in with the `IOT_USERNAME` / `IOT_PASSWORD` you set. The InfluxDB data source and three dashboards (*Production Line OEE*, *Modbus Simulator*, *UA Cloud Publisher Diagnostics*) are pre-provisioned (see *Pre-Provisioned Grafana Dashboards*). |
 | **UA Cloud Action** | `http://<device-ip>:8082` | Status UI for the automated feedback loop (data-source, broker, and Commander connectivity) and OPC UA Web API. Log in with the `IOT_USERNAME` / `IOT_PASSWORD` you set (see *Automated Feedback Loop with UA Cloud Action*). |
 | **MQTT Explorer** | `http://<device-ip>:4000` | **Web UI for the Mosquitto broker** — browse the live topic tree, inspect the OPC UA PubSub payloads on `data/#` and `metadata`, and publish messages by hand (handy for driving UA Cloud Commander on `commands`). The broker connection is pre-provisioned — just press **Connect**; see *Inspecting the Broker with MQTT Explorer*. ⚠️ **No built-in authentication.** |
 
@@ -824,7 +824,7 @@ Once connected you will see the live topic tree:
 
 ## Pre-Provisioned Grafana Dashboards
 
-Two dashboards are provisioned automatically from the `grafana-dashboards`
+Three dashboards are provisioned automatically from the `grafana-dashboards`
 ConfigMap in [`cloud.yaml`](./cloud.yaml) and appear under **Dashboards** in
 Grafana without any manual import.
 
@@ -832,6 +832,7 @@ Grafana without any manual import.
 |---|---|---|
 | **Production Line OEE** | `production-line-oee` | Line and per-station OEE, station status, cycle time and product counts for the simulated production line. Has a **Station** dropdown (`assembly`, `test`, `packaging`). This is also the Grafana home dashboard. |
 | **Modbus Simulator** | `modbus-simulator` | All 8 tags of the simulated Modbus TCP device, onboarded through UA Edge Translator (see *Simulated Modbus TCP Device*). |
+| **UA Cloud Publisher Diagnostics** | `publisher-diagnostics` | The Publisher's own health: broker connection, OPC UA session/subscription/monitored-item counts, queue depth, throughput, latency and failure counters. |
 
 ### Reading the Production Line OEE Dashboard
 
@@ -870,6 +871,30 @@ passing through states it never occupied:
 > whereas the Manufacturing Ontologies reference calculates them over a fixed
 > shift window. The two therefore will not produce the same number for the same
 > line.
+
+### Reading the UA Cloud Publisher Diagnostics Dashboard
+
+The Publisher publishes its own health as OPC UA nodes under
+`nsu=http://opcfoundation.org/UA/CloudPublisher/` (see `Diagnostics.cs`), so
+these values travel the same `data/#` → Telegraf → InfluxDB path as production
+telemetry and need no extra configuration.
+
+When telemetry stops arriving, these panels localise the fault quickly:
+
+| Panel | What it tells you |
+|---|---|
+| **Connected to broker** | Whether the MQTT session is up at all. Stepped line, mapped to Connected / Disconnected. |
+| **OPC UA sessions / subscriptions / monitored items** | Whether the Publisher is still attached to the source servers. A drop here means the problem is upstream of MQTT. |
+| **Internal queue depth** | Back-pressure. Sustained growth means the Publisher is reading faster than it can send. |
+| **Enqueue failures** | The queue hit `InternalQueueCapacity` and data was dropped. Any increase is data loss. |
+| **Broker messages / second**, **Monitored item notifications / second** | Actual throughput, to compare against the configured publishing interval. |
+| **Average message size / latency** | Broker round-trip health. |
+| **Send failures**, **Stored messages left to send** | Broker-side trouble; stored messages accumulate while sending fails. |
+| **Working set** | Publisher memory — worth watching on a CM5. |
+
+> **Note:** these counters are cumulative since Publisher start, so they reset on
+> a restart. A flat line is normal: InfluxDB only stores changes, so a counter
+> that stops moving simply stops producing points.
 
 ## Tutorials
 

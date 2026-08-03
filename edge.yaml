@@ -372,7 +372,7 @@ data:
       "AltBrokerUsername": null,
       "AltBrokerPassword": null,
       "SendUAStatus": false,
-      "SendUAConnection": true,
+      "SendUAConnection": false,
       "SendDiagnosticsMessages": true,
       "MetadataSendInterval": 300,
       "BrokerCommandTopic": null,
