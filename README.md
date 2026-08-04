@@ -16,6 +16,11 @@ OPC Foundation Cloud Initiative Open-Source Reference Solution
     - [Prerequisite: enable memory cgroups (Raspberry Pi only)](#prerequisite-enable-memory-cgroups-raspberry-pi-only)
   - [Apply the Stack Manifests](#apply-the-stack-manifests)
   - [Where Telemetry Data Is Persisted](#where-telemetry-data-is-persisted)
+  - [Updating the Container Images](#updating-the-container-images)
+- [Uninstalling](#uninstalling)
+  - [Remove the Stack, Keep K3s](#remove-the-stack-keep-k3s)
+  - [Remove the Persisted Data Too](#remove-the-persisted-data-too)
+  - [Remove K3s Itself](#remove-k3s-itself)
 - [Simulated Production Line](#simulated-production-line)
   - [Data Flows Immediately](#data-flows-immediately)
   - [Simulated Modbus TCP Device (Non-OPC UA)](#simulated-modbus-tcp-device-non-opc-ua)
@@ -423,6 +428,121 @@ Related OPC UA telemetry persistence paths are also mapped as `hostPath` volumes
 > the org. Treat it as a secret and see
 > [Production Hardening Recommendations](#production-hardening-recommendations)
 > for scoping it down.
+
+### Updating the Container Images
+
+All containers use **`imagePullPolicy: IfNotPresent`** so the stack can be
+deployed and restarted on an air-gapped network without reaching a registry.
+
+Most images are pinned to an explicit version (`grafana/grafana:13.1.1`,
+`influxdb:2.9`, …), so bumping one means editing the tag in the manifest and
+re-applying — the new tag is not in the local cache, so K3s fetches it.
+
+**The six OPC Foundation components are different.** They track a floating
+`:main` tag:
+
+```
+ghcr.io/opcfoundation/ua-edgetranslator:main
+ghcr.io/opcfoundation/ua-edgetranslator-drivers:main
+ghcr.io/opcfoundation/ua-cloudcommander:main
+ghcr.io/opcfoundation/ua-cloudaction:main
+ghcr.io/barnstee/ua-cloudpublisher:main
+ghcr.io/digitaltwinconsortium/manufacturingontologies:main
+```
+
+Because the tag never changes, `IfNotPresent` means K3s keeps using the copy it
+already has. **A `kubectl rollout restart` will not pick up a new build** — it
+re-creates the pod from the same cached image.
+
+Updating therefore takes two steps, in this order: **scale the workload down so
+the image is no longer in use, then delete it.** `crictl` refuses to remove an
+image that a running container references, so deleting first silently does
+nothing.
+
+```bash
+# 1. stop the workload so its image becomes unused
+kubectl scale deployment/ua-cloudpublisher -n edge --replicas=0
+kubectl wait --for=delete pod -l app=ua-cloudpublisher -n edge --timeout=120s
+
+# 2. drop the cached image
+sudo k3s crictl rmi ghcr.io/barnstee/ua-cloudpublisher:main
+
+# 3. start it again - the image is gone, so this pulls the current :main
+kubectl scale deployment/ua-cloudpublisher -n edge --replicas=1
+kubectl rollout status deployment/ua-cloudpublisher -n edge
+```
+
+> **`sudo k3s crictl rmi --prune` is not a shortcut for this.** It removes only
+> images that **no running container is using**, so every image you actually care
+> about updating is skipped. It is useful for reclaiming disk space after a
+> version bump has left old tags behind, not for refreshing a running component.
+
+To rebuild the whole stack on current images, delete the namespaces first — then
+nothing is running and a prune clears everything:
+
+```bash
+kubectl delete namespace cloud edge munich --ignore-not-found
+kubectl get ns -w                  # Ctrl+C once all three have gone
+sudo k3s crictl rmi --prune        # now genuinely removes every stack image
+envsubst '${IOT_USERNAME} ${IOT_PASSWORD} ${INFLUX_TOKEN}' < cloud.yaml | kubectl apply -f -
+envsubst '${IOT_USERNAME} ${IOT_PASSWORD}' < edge.yaml | kubectl apply -f -
+```
+
+> Updating obviously requires registry access — on an air-gapped node, side-load
+> the new image with `sudo k3s ctr images import <file>.tar` instead, which
+> replaces the cached copy without needing to delete it first.
+
+## Uninstalling
+
+### Remove the Stack, Keep K3s
+
+Deleting the three namespaces stops and removes every workload:
+
+```bash
+kubectl delete namespace cloud edge munich --ignore-not-found
+kubectl get ns -w      # Ctrl+C once all three have gone
+```
+
+> Namespace deletion occasionally stalls on finalizers. If one sits in
+> `Terminating` for more than a minute or two, inspect what is left with
+> `kubectl get all -n <namespace>` before forcing anything.
+
+**This does not delete your data.** Every path in the table under
+[Where Telemetry Data Is Persisted](#where-telemetry-data-is-persisted) is a
+`hostPath` on the Pi and survives. Re-applying the manifests brings the stack
+back up with the same telemetry, certificates, users and dashboards.
+
+### Remove the Persisted Data Too
+
+To start genuinely from scratch — new certificates, empty database, fresh admin
+accounts — also delete the host directories:
+
+```bash
+sudo rm -rf /mosquitto /influxdb2 /portainer /grafana
+sudo rm -rf /translator /publisher /commander /productionline
+```
+
+> ⚠️ This is irreversible. It destroys all recorded telemetry, the InfluxDB
+> admin token, the Mosquitto CA and password file, and **every OPC UA
+> certificate and trust list** — the stations, Publisher, Translator and
+> Commander all mint new identities and re-establish trust on the next start.
+> Save your `INFLUX_TOKEN` first if you still need to read the old data.
+
+### Remove K3s Itself
+
+To return the Pi to a plain OS install:
+
+```bash
+sudo /usr/local/bin/k3s-uninstall.sh
+```
+
+That stops the service, removes the binary, the cluster state under
+`/var/lib/rancher/k3s`, and all cached container images. It does **not** touch
+the `hostPath` directories above (delete them separately, as shown), nor the
+`cgroup_memory=1 cgroup_enable=memory` parameters added to
+`/boot/firmware/cmdline.txt` during
+[Install K3s](#install-k3s) — harmless to leave in place, but remove them by hand
+if you want the boot configuration back exactly as it was.
 
 ## Simulated Production Line
 
