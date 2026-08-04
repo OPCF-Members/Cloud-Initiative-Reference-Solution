@@ -438,7 +438,7 @@ Most images are pinned to an explicit version (`grafana/grafana:13.1.1`,
 `influxdb:2.9`, …), so bumping one means editing the tag in the manifest and
 re-applying — the new tag is not in the local cache, so K3s fetches it.
 
-**The six OPC Foundation components are different.** They track a floating
+**The following four OPC Foundation and two external components are different.** They track a floating
 `:main` tag:
 
 ```
