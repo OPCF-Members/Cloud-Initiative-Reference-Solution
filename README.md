@@ -30,6 +30,9 @@ OPC Foundation Cloud Initiative Open-Source Reference Solution
   - [Single Cluster vs. Split Edge/Cloud Deployment](#single-cluster-vs-split-edgecloud-deployment)
 - [Inspecting the Broker with MQTT Explorer](#inspecting-the-broker-with-mqtt-explorer)
 - [Pre-Provisioned Grafana Dashboards](#pre-provisioned-grafana-dashboards)
+  - [Reading the Production Line OEE Dashboard](#reading-the-production-line-oee-dashboard)
+  - [Production Shifts and Choosing the Grafana Time Range](#production-shifts-and-choosing-the-grafana-time-range)
+  - [Reading the UA Cloud Publisher Diagnostics Dashboard](#reading-the-ua-cloud-publisher-diagnostics-dashboard)
 - [Tutorials](#tutorials)
   - [Onboarding an OPC UA Device](./tutorial-onboarding-opcua-device.md)
   - [Onboarding a Non-OPC UA Device](./tutorial-onboarding-non-opcua-device.md)
@@ -445,6 +448,11 @@ implements OPC UA methods (e.g. opening a pressure relief valve) that the
 > names (`mes.munich`, `assembly.munich`, …) then match the OPC UA application
 > URIs the stations advertise, so the endpoint URLs in the Publisher's
 > configuration resolve without modification.
+
+The line follows a three-shift schedule and is **idle outside those shifts**, so
+telemetry pauses during the daily breaks. This matters when reading OEE — see
+[Production Shifts and Choosing the Grafana Time
+Range](#production-shifts-and-choosing-the-grafana-time-range).
 
 ### Data Flows Immediately
 
@@ -868,9 +876,57 @@ passing through states it never occupied:
 | 4 | Fault |
 
 > **Note:** the OEE figures here are calculated over the dashboard's time range,
-> whereas the Manufacturing Ontologies reference calculates them over a fixed
-> shift window. The two therefore will not produce the same number for the same
-> line.
+> not over a fixed shift window. Selecting a range that spans a shift break will
+> under-report OEE — see *Production Shifts and Choosing the Grafana Time Range*
+> below before reading anything into the numbers.
+
+### Production Shifts and Choosing the Grafana Time Range
+
+**The simulated line does not run around the clock.** The MES station reads
+`ShiftTimes.csv` and holds the line idle outside the configured shifts. The
+`munich` line runs in **`Europe/Berlin`** (set via the `FactoryTimeZone`
+environment variable in [`edge.yaml`](./edge.yaml)):
+
+| Shift | Start | End |
+|---|---|---|
+| Morning | 07:00 | 14:00 |
+| Afternoon | 15:00 | 22:00 |
+| Night | 23:00 | 06:00 (next day) |
+
+That leaves three daily idle gaps — **06:00-07:00, 14:00-15:00 and 22:00-23:00**
+— during which the stations report `Ready` and produce nothing.
+
+#### Why the time range matters
+
+The OEE panels compute Availability from the **whole selected window**:
+
+```
+availability = (windowLength - faultyTime) / windowLength
+```
+
+The simulation has no concept of "planned downtime", so an idle hour is not
+excluded — it is counted as time the line should have been producing. Selecting a
+range that includes a shift break therefore *reduces* OEE, and the more of a break
+you include, the lower it reads.
+
+**Choose a range that sits entirely inside one shift.** In Grafana use the time
+picker's **Absolute time range** and enter, for example:
+
+| Goal | From | To |
+|---|---|---|
+| Current morning shift | `07:00` | `14:00` |
+| Last hour of production | `now-1h` | `now` (only while a shift is running) |
+| A full shift, yesterday | `2026-08-03 07:00:00` | `2026-08-03 14:00:00` |
+
+> **Grafana renders in your browser's timezone by default.** If that is not
+> `Europe/Berlin`, the shift boundaries will not fall where the table above says.
+> Set the dashboard timezone explicitly via the time picker's **Change time
+> settings → Timezone**, or your figures will silently include break time.
+
+`now-1h` — Grafana's default — is only safe mid-shift. Run it at 14:30 and the
+window is entirely inside the afternoon break, so Availability approaches zero
+and OEE collapses. That is the calculation working correctly on an idle line, not
+a fault.
 
 ### Reading the UA Cloud Publisher Diagnostics Dashboard
 
