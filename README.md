@@ -693,11 +693,7 @@ All eight tags are charted out of the box on the pre-provisioned **Modbus
 Simulator** dashboard — see [Pre-Provisioned Grafana
 Dashboards](#pre-provisioned-grafana-dashboards).
 
-> **Use this as your template.** To onboard a *real* Modbus (or BACnet, S7,
-> Rockwell, OPC DA, …) device, copy this ConfigMap, change `base` to your device's
-> address and edit the register addresses/types — no code, no rebuild. Remember to
-> add the resulting NodeIds (namespace derived from your TD's `name`) to the
-> Publisher if you want the data published. See
+> To onboard a *real* Modbus (or BACnet, S7, Rockwell, OPC DA, …) device, see
 > [Onboarding a Non-OPC UA Device](./tutorial-onboarding-non-opcua-device.md) and the
 > additional examples in the
 > [UA Edge Translator samples](https://github.com/OPCFoundation/UA-EdgeTranslator/tree/main/Samples).
