@@ -35,7 +35,7 @@ spec:
       # reports 1/1 Running. Chown by NAME so we do not depend on the numeric UID.
       - name: init-chown-data
         image: ghcr.io/opcfoundation/ua-edgetranslator:main
-        imagePullPolicy: Always
+        imagePullPolicy: IfNotPresent
         securityContext:
           runAsUser: 0
         command: ["/bin/sh", "-c"]
@@ -60,7 +60,7 @@ spec:
       # time we start anyway - the translator retries asset connections by itself.
       - name: wait-for-modbus
         image: busybox:1.38
-        imagePullPolicy: Always
+        imagePullPolicy: IfNotPresent
         command: ["/bin/sh", "-c"]
         args:
           - |
@@ -74,7 +74,7 @@ spec:
       # assets added or edited through the UI are preserved across restarts.
       - name: seed-thing-descriptions
         image: busybox:1.38
-        imagePullPolicy: Always
+        imagePullPolicy: IfNotPresent
         command: ["/bin/sh", "-c"]
         args:
           - |
@@ -100,7 +100,7 @@ spec:
       # with no protocol support and cannot onboard any asset.
       - name: ua-edgetranslator-drivers
         image: ghcr.io/opcfoundation/ua-edgetranslator-drivers:main
-        imagePullPolicy: Always
+        imagePullPolicy: IfNotPresent
         command: ["/bin/sh", "-c", "cp -a /drivers/. /app/drivers/"]
         volumeMounts:
         - name: "drivers"
@@ -108,7 +108,7 @@ spec:
       containers:
       - name: ua-edgetranslator
         image: ghcr.io/opcfoundation/ua-edgetranslator:main
-        imagePullPolicy: Always
+        imagePullPolicy: IfNotPresent
         env:
         - name: OPCUA_USERNAME
           value: "${IOT_USERNAME}"
@@ -231,7 +231,7 @@ spec:
       # to them straight away instead of failing on first connect.
       - name: wait-for-productionline
         image: busybox:1.38
-        imagePullPolicy: Always
+        imagePullPolicy: IfNotPresent
         command: ["/bin/sh", "-c"]
         args:
           - |
@@ -252,7 +252,7 @@ spec:
       # also subscribes to the Modbus asset it maps into OPC UA.
       - name: wait-for-edgetranslator
         image: busybox:1.38
-        imagePullPolicy: Always
+        imagePullPolicy: IfNotPresent
         command: ["/bin/sh", "-c"]
         args:
           - |
@@ -268,7 +268,7 @@ spec:
       # so any later changes made through the UI are preserved.
       - name: seed-settings
         image: busybox:1.38
-        imagePullPolicy: Always
+        imagePullPolicy: IfNotPresent
         command: ["/bin/sh", "-c"]
         args:
           - |
@@ -292,7 +292,7 @@ spec:
       containers:
       - name: ua-cloudpublisher
         image: ghcr.io/barnstee/ua-cloudpublisher:main
-        imagePullPolicy: Always
+        imagePullPolicy: IfNotPresent
         env:
         - name: PUBLISHER_USERNAME
           value: "${IOT_USERNAME}"
@@ -808,7 +808,7 @@ spec:
       containers:
       - name: ua-cloudcommander
         image: ghcr.io/opcfoundation/ua-cloudcommander:main
-        imagePullPolicy: Always
+        imagePullPolicy: IfNotPresent
         env:
         # Broker connection (Mosquitto, TLS MQTT on 8883 with username/password auth)
         - name: BROKERNAME
@@ -926,7 +926,7 @@ spec:
       containers:
       - name: mes
         image: ghcr.io/digitaltwinconsortium/manufacturingontologies:main
-        imagePullPolicy: Always
+        imagePullPolicy: IfNotPresent
         env:
         - name: StationType
           value: "mes"
@@ -987,7 +987,7 @@ spec:
       containers:
       - name: assembly
         image: ghcr.io/digitaltwinconsortium/manufacturingontologies:main
-        imagePullPolicy: Always
+        imagePullPolicy: IfNotPresent
         env:
         - name: StationType
           value: "assembly"
@@ -1048,7 +1048,7 @@ spec:
       containers:
       - name: test
         image: ghcr.io/digitaltwinconsortium/manufacturingontologies:main
-        imagePullPolicy: Always
+        imagePullPolicy: IfNotPresent
         env:
         - name: StationType
           value: "test"
@@ -1109,7 +1109,7 @@ spec:
       containers:
       - name: packaging
         image: ghcr.io/digitaltwinconsortium/manufacturingontologies:main
-        imagePullPolicy: Always
+        imagePullPolicy: IfNotPresent
         env:
         - name: StationType
           value: "packaging"
@@ -1369,7 +1369,7 @@ spec:
       containers:
         - name: modbus-simulator
           image: python:3.12-slim
-          imagePullPolicy: Always
+          imagePullPolicy: IfNotPresent
           command: ["python3", "-u", "/app/modbus_server.py"]
           ports:
             - containerPort: 502

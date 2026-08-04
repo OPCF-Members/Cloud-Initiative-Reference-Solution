@@ -303,7 +303,7 @@ spec:
       initContainers:
         - name: init-chown-data
           image: busybox:1.38
-          imagePullPolicy: Always
+          imagePullPolicy: IfNotPresent
           command: ["/bin/sh", "-c", "chown -R 1883:1883 /mosquitto/data"]
           securityContext:
             runAsUser: 0
@@ -312,7 +312,7 @@ spec:
               mountPath: /mosquitto/data
         - name: gen-certs
           image: alpine/openssl:3.5.7
-          imagePullPolicy: Always
+          imagePullPolicy: IfNotPresent
           command: ["/bin/sh", "-c"]
           args:
             - |
@@ -350,7 +350,7 @@ spec:
       containers:
         - name: mosquitto
           image: eclipse-mosquitto:2.1.2-alpine
-          imagePullPolicy: Always
+          imagePullPolicy: IfNotPresent
           env:
             - name: MOSQUITTO_USERNAME
               value: "${IOT_USERNAME}"
@@ -528,7 +528,7 @@ spec:
         # read-only ConfigMap mount into an emptyDir.
         - name: seed-config
           image: busybox:1.38
-          imagePullPolicy: Always
+          imagePullPolicy: IfNotPresent
           command: ["/bin/sh", "-c"]
           args:
             - |
@@ -627,7 +627,7 @@ spec:
       containers:
         - name: influxdb
           image: influxdb:2.9
-          imagePullPolicy: Always
+          imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8086
               name: http
@@ -722,7 +722,7 @@ spec:
       initContainers:
         - name: wait-for-mosquitto
           image: busybox:1.38
-          imagePullPolicy: Always
+          imagePullPolicy: IfNotPresent
           command: ["/bin/sh", "-c"]
           args:
             - |
@@ -734,7 +734,7 @@ spec:
       containers:
         - name: telegraf
           image: telegraf:1.39-alpine
-          imagePullPolicy: Always
+          imagePullPolicy: IfNotPresent
           env:
             - name: INFLUX_TOKEN
               valueFrom:
@@ -812,7 +812,7 @@ spec:
       containers:
       - name: portainer
         image: portainer/portainer-ce:2.44.0
-        imagePullPolicy: Always
+        imagePullPolicy: IfNotPresent
         args:
         # Use the in-cluster (Kubernetes) environment as the default endpoint
         - "--tunnel-port=8000"
@@ -2926,7 +2926,7 @@ spec:
         # Ensure the hostPath data dir is writable by the grafana user (uid/gid 472)
         - name: init-chown-data
           image: busybox:1.38
-          imagePullPolicy: Always
+          imagePullPolicy: IfNotPresent
           command: ["sh", "-c", "chown -R 472:472 /var/lib/grafana"]
           securityContext:
             runAsUser: 0
@@ -2936,7 +2936,7 @@ spec:
       containers:
         - name: grafana
           image: grafana/grafana:13.1.1
-          imagePullPolicy: Always
+          imagePullPolicy: IfNotPresent
           env:
             - name: GF_SECURITY_ADMIN_USER
               value: "${IOT_USERNAME}"
@@ -3025,7 +3025,7 @@ spec:
       containers:
       - name: ua-cloudaction
         image: ghcr.io/opcfoundation/ua-cloudaction:main
-        imagePullPolicy: Always
+        imagePullPolicy: IfNotPresent
         env:
         # --- Web UI / OPC UA Web API login ---
         - name: ADMIN_USERNAME
