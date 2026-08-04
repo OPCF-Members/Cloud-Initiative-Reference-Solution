@@ -26,7 +26,7 @@ Purchase the following components from Waveshare as a complete kit:
 | # | Component | Description | Product Page |
 |---|-----------|-------------|--------------|
 | 1 | **IPCBox-CM5-A** | Industrial computer / enclosure kit for the Raspberry Pi Compute Module 5 (aluminum-alloy passive-cooling case, carrier board, dual Gigabit Ethernet, USB, dual HDMI, M.2 M-Key NVMe slot, wide-voltage DC input, RTC). | <https://www.waveshare.com/ipcbox-cm5-a.htm> |
-| 2 | **Raspberry Pi Compute Module 5** | The system-on-module (BCM2712 quad-core Cortex-A76). Select a variant **without eMMC** (not needed), a minimum of 4GB RAM (8GB recommended for larger production use) and optionally WiFi to match your needs. | <https://www.waveshare.com/compute-module-5.htm> |
+| 2 | **Raspberry Pi Compute Module 5** | The system-on-module (BCM2712 quad-core Cortex-A76). Select a variant **without eMMC** (not needed), a minimum of 4GB RAM (8GB recommended for larger production use) and optionally WiFi (see note below about the antenna!) to match your needs. | <https://www.waveshare.com/compute-module-5.htm> |
 | 3 | **SK NVMe 2242 128G SSD (M.2)** | 128 GB M.2 2242 NVMe SSD used for the operating system and application data storage. | <https://www.waveshare.com/sk-nvme-2242-128g-ssd-m.2.htm> |
 | 4 | **USB-to-M.2 (NVMe) adapter / enclosure** | A USB 3.x adapter that accepts an **M-Key M.2 NVMe** SSD (2242 compatible). Used to connect the SSD to a separate PC so it can be imaged with Raspberry Pi Imager before final assembly. | <https://www.waveshare.com/usb-to-sata.htm> |
 
@@ -58,7 +58,7 @@ USB-to-M.2 adapter and Raspberry Pi Imager. Do this before assembling the unit.
 
 Follow the instructions in the [Assembly Guide](https://docs.waveshare.com/IPCBOX-CM5-A/Assembly-Guide).
 
-> ⚠️ If you bought the CM5 with WiFi, don't forget to plug the antenna cable into the CM5 board before assembly!
+> ⚠️ If you bought the CM5 with WiFi, don't forget to [purchase](https://www.amazon.com/Compatible-Antenna-Raspberry-Supports-Frequency/dp/B0D4MKJHXJ) and plug the antenna cable into the CM5 board before assembly!
 >
 >The CM5's wireless module has **no usable on-board antenna** — unlike a Raspberry
 >Pi 5, it relies on an external antenna connected to the U.FL/MHF4 connector on
