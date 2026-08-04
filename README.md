@@ -465,7 +465,7 @@ kubectl scale deployment/ua-cloudpublisher -n edge --replicas=0
 kubectl wait --for=delete pod -l app=ua-cloudpublisher -n edge --timeout=120s
 
 # 2. drop the cached image
-sudo k3s crictl rmi ghcr.io/barnstee/ua-cloudpublisher:main
+sudo k3s crictl --timeout=5m rmi ghcr.io/barnstee/ua-cloudpublisher:main
 
 # 3. start it again - the image is gone, so this pulls the current :main
 kubectl scale deployment/ua-cloudpublisher -n edge --replicas=1
@@ -482,8 +482,8 @@ nothing is running and a prune clears everything:
 
 ```bash
 kubectl delete namespace cloud edge munich --ignore-not-found
-kubectl get ns -w                  # Ctrl+C once all three have gone
-sudo k3s crictl rmi --prune        # now genuinely removes every stack image
+kubectl get ns -w                            # Ctrl+C once all three have gone
+sudo k3s crictl --timeout=5m rmi --prune     # now genuinely removes every stack image
 envsubst '${IOT_USERNAME} ${IOT_PASSWORD} ${INFLUX_TOKEN}' < cloud.yaml | kubectl apply -f -
 envsubst '${IOT_USERNAME} ${IOT_PASSWORD}' < edge.yaml | kubectl apply -f -
 ```
