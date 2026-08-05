@@ -1127,10 +1127,10 @@ the K3s node itself (root of trust for all `hostPath` data).
 
 | STRIDE category | Representative threats in this stack | Mitigations already in place | Residual risk / gaps |
 |-----------------|--------------------------------------|------------------------------|----------------------|
-| **Spoofing** (identity) | A rogue client impersonates the Publisher or **UA Cloud Commander/Action** to the broker; an attacker impersonates a web UI user (Translator, Publisher, Grafana, UA Cloud Action, or Portainer); a fake OPC UA server feeds the Publisher; a forged `ua-action-request` triggers an OPC UA method; an unauthenticated caller hits the **OPC UA Web API**; anything on the pod network impersonates a Modbus master. | MQTT broker requires username/password (`allow_anonymous false`); most web UIs (`:8080/:8081/:8082/:3000/:9443`) require login; the **UA Cloud Action web UI and OPC UA Web API mandate HTTP Basic authentication on every request (no anonymous access)**; OPC UA supports certificate exchange between Publisher/Commander and server. | Single shared credential set across all components (including Grafana/Portainer admin and the Web API); Basic-auth credentials are only as safe as the transport (send over TLS in production); no per-service identities or mutual TLS (mTLS); broker does not authenticate clients by certificate; any client that can publish to `commands` can drive Commander; **MQTT Explorer (`:4000`) has no authentication of its own, so anyone who can reach it can publish to any topic — including `commands`**; **Modbus TCP has no authentication whatsoever by protocol design** — the simulator (and any real Modbus device) trusts every caller. |
+| **Spoofing** (identity) | A rogue client impersonates the Publisher or **UA Cloud Commander/Action** to the broker; an attacker impersonates a web UI user (Translator, Publisher, Grafana, UA Cloud Action, or Portainer); a fake OPC UA server feeds the Publisher; a forged `ua-action-request` triggers an OPC UA method; an unauthenticated caller hits the **OPC UA Web API**; anything on the pod network impersonates a Modbus master; **theft of the Publisher's CA key (`/publisher/pki/issuer/private`) lets an attacker mint a trusted certificate for any component.** | MQTT broker requires username/password (`allow_anonymous false`); most web UIs (`:8080/:8081/:8082/:3000/:9443`) require login; the **UA Cloud Action web UI and OPC UA Web API mandate HTTP Basic authentication on every request (no anonymous access)**; OPC UA supports certificate exchange between Publisher/Commander and server. | Single shared credential set across all components (including Grafana/Portainer admin and the Web API); Basic-auth credentials are only as safe as the transport (send over TLS in production); no per-service identities or mutual TLS (mTLS); broker does not authenticate clients by certificate; any client that can publish to `commands` can drive Commander; **the GDS issuer key is a 12-year self-signed CA stored in a PKCS#12 with an empty password on a `hostPath` volume** (see hardening item 8); **MQTT Explorer (`:4000`) has no authentication of its own, so anyone who can reach it can publish to any topic — including `commands`**; **Modbus TCP has no authentication whatsoever by protocol design** — the simulator (and any real Modbus device) trusts every caller. |
 | **Tampering** (integrity) | Modification of telemetry in transit; tampering with `hostPath` config/cert files on the node; editing the ConfigMaps; **altering the imported `opcua_model` data** or the model importer script; a malicious command writing/actuating an OPC UA node via Commander; writing Modbus coils/registers on the simulated device. | MQTT is carried over TLS (8883); config is delivered via Kubernetes ConfigMaps/Secrets; Commander/Action send spec-compliant OPC UA PubSub Action envelopes; the seeded Thing Description and settings are delivered read-only from ConfigMaps. | Telegraf and UA Cloud Action use TLS verification skip (`insecure_skip_verify` / `MQTT_TLS_INSECURE=true`), so a man-in-the-middle with any cert is accepted; `hostPath` volumes (`/influxdb2`, `/translator/*`, `/publisher/*`, `/commander/*`, `/productionline/*`, `/mosquitto`, `/portainer`, `/grafana`) are writable by anyone with node access; no message signing on payloads; Commander performs Writes/MethodCalls with no per-action authorization; **Modbus traffic is plaintext and unauthenticated**, so anything on the pod network can read or write the simulated device's registers. |
 | **Repudiation** (auditability) | An operator changes a device mapping, publish set, Grafana dashboard, or issues a command and denies it; no record of who logged in or who imported a model. | Component logs are written to `hostPath` `logs` directories and pod stdout; Portainer records some cluster events. | No centralized, tamper-evident audit log; shared credentials make actions unattributable to an individual; command/action requests and model imports are not attributably logged; no log shipping or retention policy. |
-| **Information disclosure** (confidentiality) | Sniffing telemetry; reading credentials from the manifest; exposed dashboards (Grafana, Portainer, UA Cloud Action) on the node IP; leaking the **UA Cloud Library credentials** used by the import Job. | MQTT is encrypted with TLS; `INFLUX_TOKEN` is stored in a Kubernetes `Secret`; credentials are supplied at apply time (not committed to git). | Credentials (including UA Cloud Library and Grafana/Portainer admin) are injected as plain-text env vars (visible via `kubectl describe`/`exec`); Kubernetes Secrets are base64, not encrypted at rest by default; self-signed broker cert offers encryption but no server-identity assurance; all UIs are exposed on the node IP with no network policy. |
+| **Information disclosure** (confidentiality) | Sniffing telemetry; reading credentials from the manifest; exposed dashboards (Grafana, Portainer, UA Cloud Action) on the node IP; leaking the **UA Cloud Library credentials** used by the import Job; **reading an OPC UA private key — or the Publisher's CA key — off the node (or off the SSD if the device is removed).** | MQTT is encrypted with TLS; `INFLUX_TOKEN` is stored in a Kubernetes `Secret`; credentials are supplied at apply time (not committed to git). | Credentials (including UA Cloud Library and Grafana/Portainer admin) are injected as plain-text env vars (visible via `kubectl describe`/`exec`); Kubernetes Secrets are base64, not encrypted at rest by default; self-signed broker cert offers encryption but no server-identity assurance; **OPC UA private keys, including the GDS issuer (CA) key, are held unprotected in `Directory` stores on `hostPath` volumes** (see hardening item 8); all UIs are exposed on the node IP with no network policy. |
 | **Denial of service** (availability) | Flooding the broker or web UIs; filling the node disk with telemetry or repeated model imports; a crash loop; a runaway feedback loop from UA Cloud Action; overloading the simulated stations or the Modbus simulator with connections. | Liveness/readiness probes restart unhealthy pods; single-replica deployments recover automatically; the importer is a short-lived Job with `ttlSecondsAfterFinished`; **UA Cloud Action has a built-in rate limiter that bounds how often it actuates**; the Modbus simulator declares CPU/memory `requests`/`limits`. | No rate limiting, quotas, or `resources` requests/limits on most pods; unbounded InfluxDB growth on the local SSD (now including `opcua_model` points); a single node is a single point of failure; the broker persists to `hostPath` (`/mosquitto`), reducing message loss on restart though the single node remains a SPOF; UA Cloud Action's rate limit still needs tuning for your environment. |
 | **Elevation of privilege** (authorization) | Container escape to the node; a compromised pod reading another component's data via shared host paths; using the InfluxDB admin token for full DB control; **abusing Portainer's `cluster-admin` ServiceAccount to take over the whole cluster**; using Commander/Action to reach and control OT devices. | Distinct container images per component; `nodeSelector` pins workloads to Linux; the importer Job uses `restartPolicy: Never`. | Containers run with default (often root) user and no `securityContext`; no `NetworkPolicy` isolation between pods; the InfluxDB token is an all-powerful admin token; **Portainer is bound to `cluster-admin`, so compromising it compromises the cluster**; Commander bridges IT→OT with method-call/write capability and no fine-grained authorization; no RBAC scoping for the workloads. |
 
@@ -1169,21 +1169,87 @@ deployment. Prioritize the items marked **(High)**.
    (`/influxdb2` and the other `hostPath` volumes) and for Kubernetes Secrets
    (e.g. a KMS provider or an encrypted etcd). Replace ad-hoc `hostPath` volumes
    with managed `PersistentVolumeClaims` where possible.
-8. **Add auditing and monitoring.** Ship component and access logs to a central,
+8. **Encrypt the OPC UA private keys at rest (High).** Every OPC UA component in
+   this stack holds its application instance certificate in a `Directory`
+   certificate store, so the **private key sits unencrypted on the Pi's
+   filesystem** under `<component>/pki/own/private/*.pfx`:
+
+   | Path on the Pi | Whose identity |
+   |---|---|
+   | `/publisher/pki/own/private` | UA Cloud Publisher |
+   | `/translator/pki/own/private` | UA Edge Translator |
+   | `/commander/pki/own/private` | UA Cloud Commander |
+   | `/productionline/munich/<station>/pki/own/private` | each simulated station |
+
+   These keys *are* the components' identities. Anyone who can read one can
+   impersonate that component to every OPC UA server that trusts it — and in the
+   Commander's case that means calling methods on your OT devices. They are more
+   sensitive than the telemetry they protect, and unlike the broker certificate
+   they are not regenerated on restart.
+
+   > ⚠️ **`/publisher/pki/issuer/private` is the most sensitive file in the whole
+   > deployment.** UA Cloud Publisher acts as a small Certificate Authority for
+   > [GDS server push](#automatic-certificate-provisioning-gds-server-push): on
+   > first start it mints a self-signed **CA certificate** (`SetCAConstraint()`,
+   > 12-year lifetime) and stores the PKCS#12 there, **protected by an empty
+   > password**. That single file can issue a valid certificate for *any*
+   > OPC UA component in the system, and every station already trusts it. Stealing an
+   > `own` key impersonates one component; stealing the issuer key lets the
+   > holder mint identities at will and be trusted by all of them — and the
+   > 12-year lifetime means the exposure does not expire in any useful sense.
+   > Treat it as the deployment's root of trust and protect it accordingly.
+
+   Mitigate in layers, strongest first:
+
+   - **Keep them off the plain filesystem.** Back the `pki` volumes with an
+     encrypted store rather than a bare `hostPath` — a LUKS-encrypted partition
+     or filesystem-level encryption (e.g. `fscrypt` on ext4) for the directory
+     the volumes bind to, so the keys are unreadable if the SSD is removed from
+     the device. This is the single highest-value step on a physically
+     accessible edge device such as a Pi in a cabinet.
+   - **Restrict who can read them.** Tighten the directory to the container's own
+     UID (`chmod 0700`), set `runAsNonRoot` with a dedicated UID per component,
+     and avoid mounting the `pki` directory into any other pod. Note that
+     `hostPath` volumes are readable by anyone with node access, which is one
+     more reason to prefer `PersistentVolumeClaims` (item 7).
+   - **Move the CA off the device entirely.** The self-signed issuer is a
+     convenience so the demo can provision certificates with no external
+     infrastructure. In production, use a real GDS or an existing enterprise PKI
+     (or a managed CA such as **cert-manager** with an offline root), so no
+     CA private key is ever stored on an edge node.
+   - **Prefer hardware-backed keys where the platform allows it.** The CM5 can be
+     paired with a TPM or secure element; storing the private key there means it
+     never exists in readable form on disk at all. This is the direction OPC UA
+     deployments in regulated environments are expected to take, though it
+     requires a certificate store implementation that supports it.
+   - **Rotate on exposure.** Because
+     [GDS server push](#automatic-certificate-provisioning-gds-server-push) is
+     already wired up, re-issuing a component's certificate is inexpensive —
+     treat any suspected key exposure as a rotation event rather than something
+     to tolerate, and remove the old certificate from every peer's trust list.
+     Note that rotating the **issuer** is a different matter: every station must
+     be re-provisioned against the new CA, which is why keeping it off the device
+     is preferable to planning to rotate it.
+
+   > The demo deliberately uses unencrypted `Directory` stores so the
+   > certificates can be inspected with `ls` and `openssl` while learning the
+   > system. That trade-off is appropriate for a reference deployment and
+   > inappropriate for production.
+9. **Add auditing and monitoring.** Ship component and access logs to a central,
    tamper-evident store; enable Kubernetes audit logging; and add alerting on
    authentication failures, pod restarts, and disk usage.
-9. **Manage capacity and availability.** Set InfluxDB retention policies to bound
-   growth, back up `/influxdb2` regularly, and consider multi-node/HA for the
-   broker and database to remove the single-point-of-failure.
-10. **Keep software patched.** Pin and regularly update the container image
+10. **Manage capacity and availability.** Set InfluxDB retention policies to bound
+    growth, back up `/influxdb2` regularly, and consider multi-node/HA for the
+    broker and database to remove the single-point-of-failure.
+11. **Keep software patched.** Pin and regularly update the container image
      versions, apply OS/K3s security updates, and scan images for known
      vulnerabilities as part of your release process.
-11. **Scope Portainer's cluster access (High).** The demo binds Portainer to the
+12. **Scope Portainer's cluster access (High).** The demo binds Portainer to the
     built-in `cluster-admin` role. For production, grant it a least-privilege
     `Role`/`ClusterRole` limited to the namespaces and resources operators
     actually manage, protect its UI behind the ingress, and enforce strong,
     per-user Portainer accounts (not the shared credentials).
-12. **Authorize and throttle the command/control path.** Restrict who can publish
+13. **Authorize and throttle the command/control path.** Restrict who can publish
     to the `commands` topic (broker ACLs) and validate/allow-list the OPC UA
     methods and nodes UA Cloud Commander may Write/Call. UA Cloud Action includes a **built-in rate limiter** on its actuation, so a faulty threshold
     or spoofed value cannot drive OT devices uncontrollably; tune its limit for
