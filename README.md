@@ -299,7 +299,7 @@ sudo chown "$(id -u):$(id -g)" ~/.kube/config
 export KUBECONFIG=~/.kube/config
 echo 'export KUBECONFIG=~/.kube/config' >> ~/.bashrc
 
-kubectl get nodes
+kubectl get nodes -A
 ```
 
 > K3s ships with the **Traefik** ingress controller and a built-in
