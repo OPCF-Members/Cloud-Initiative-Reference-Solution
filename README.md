@@ -1218,7 +1218,7 @@ deployment. Prioritize the items marked **(High)**.
      (or a managed CA such as **cert-manager** with an offline root), so no
      CA private key is ever stored on an edge node.
    - **Prefer hardware-backed keys where the platform allows it.** The CM5 can be
-     paired with a TPM or secure element; storing the private key there means it
+     paired with a TPM or secure element, see [here](https://docs.waveshare.com/IPCBOX-CM5-A#encryption-chip-atsha204) for the recommended hardware. Storing the private key there means it
      never exists in readable form on disk at all. This is the direction OPC UA
      deployments in regulated environments are expected to take, though it
      requires a certificate store implementation that supports it.
